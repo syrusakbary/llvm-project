@@ -113,7 +113,11 @@ bool LockFileManager::processStillExecuting(StringRef HostID, int PID) {
     return true; // Conservatively assume it's executing on error.
 
   // Check whether the process is dead. If so, we're done.
+#ifdef BINJI_HACK
   if (StoredHostID == HostID && getsid(PID) == -1 && errno == ESRCH)
+#else
+  if (StoredHostID == HostID && errno == ESRCH)
+#endif
     return false;
 #endif
 
@@ -193,7 +197,11 @@ LockFileManager::LockFileManager(StringRef FileName)
     raw_fd_ostream Out(UniqueLockFileID, /*shouldClose=*/true);
     Out << HostID << ' ';
 #if LLVM_ON_UNIX
+#ifdef BINJI_HACK
     Out << getpid();
+#else
+    Out << 31415;
+#endif
 #else
     Out << "1";
 #endif
