@@ -33,7 +33,9 @@
 #endif
 
 #include <dirent.h>
+#ifdef BINJI_HACK
 #include <pwd.h>
+#endif
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -57,10 +59,12 @@
 #include <sys/types.h>
 #if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__FreeBSD__) &&   \
     !defined(__linux__) && !defined(__FreeBSD_kernel__)
+#ifdef BINJI_HACK
 #include <sys/statvfs.h>
 #define STATVFS statvfs
 #define FSTATVFS fstatvfs
 #define STATVFS_F_FRSIZE(vfs) vfs.f_frsize
+#endif
 #else
 #if defined(__OpenBSD__) || defined(__FreeBSD__)
 #include <sys/mount.h>
@@ -222,7 +226,7 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   char link_path[MAXPATHLEN];
   if (realpath(DLInfo.dli_fname, link_path))
     return link_path;
-#else
+#elif defined BINJI_HACK
 #error GetMainExecutable is not implemented on this host yet.
 #endif
   return "";
@@ -245,6 +249,7 @@ uint32_t file_status::getLinkCount() const {
 }
 
 ErrorOr<space_info> disk_space(const Twine &Path) {
+#ifdef BINJI_HACK
   struct STATVFS Vfs;
   if (::STATVFS(Path.str().c_str(), &Vfs))
     return std::error_code(errno, std::generic_category());
@@ -254,6 +259,13 @@ ErrorOr<space_info> disk_space(const Twine &Path) {
   SpaceInfo.free = static_cast<uint64_t>(Vfs.f_bfree) * FrSize;
   SpaceInfo.available = static_cast<uint64_t>(Vfs.f_bavail) * FrSize;
   return SpaceInfo;
+#else
+  space_info SpaceInfo;
+  SpaceInfo.capacity = 0;
+  SpaceInfo.free = 0;
+  SpaceInfo.available = 0;
+  return SpaceInfo;
+#endif
 }
 
 std::error_code current_path(SmallVectorImpl<char> &result) {
@@ -276,6 +288,7 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
   result.reserve(1024);
 #endif
 
+#ifdef BINJI_HACK
   while (true) {
     if (::getcwd(result.data(), result.capacity()) == nullptr) {
       // See if there was a real error.
@@ -286,6 +299,7 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
     } else
       break;
   }
+#endif
 
   result.set_size(strlen(result.data()));
   return std::error_code();
@@ -295,8 +309,10 @@ std::error_code set_current_path(const Twine &path) {
   SmallString<128> path_storage;
   StringRef p = path.toNullTerminatedStringRef(path_storage);
 
+#ifdef BINJI_HACK
   if (::chdir(p.begin()) == -1)
     return std::error_code(errno, std::generic_category());
+#endif
 
   return std::error_code();
 }
@@ -369,6 +385,7 @@ std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
   return std::error_code();
 }
 
+#ifdef BINJI_HACK
 static bool is_local_impl(struct STATVFS &Vfs) {
 #if defined(__linux__) || defined(__GNU__)
 #ifndef NFS_SUPER_MAGIC
@@ -410,22 +427,31 @@ static bool is_local_impl(struct STATVFS &Vfs) {
   return !!(STATVFS_F_FLAG(Vfs) & MNT_LOCAL);
 #endif
 }
+#endif
 
 std::error_code is_local(const Twine &Path, bool &Result) {
+#ifdef BINJI_HACK
   struct STATVFS Vfs;
   if (::STATVFS(Path.str().c_str(), &Vfs))
     return std::error_code(errno, std::generic_category());
 
   Result = is_local_impl(Vfs);
+#else
+  Result = true;
+#endif
   return std::error_code();
 }
 
 std::error_code is_local(int FD, bool &Result) {
+#ifdef BINJI_HACK
   struct STATVFS Vfs;
   if (::FSTATVFS(FD, &Vfs))
     return std::error_code(errno, std::generic_category());
 
   Result = is_local_impl(Vfs);
+#else
+  Result = true;
+#endif
   return std::error_code();
 }
 
@@ -533,6 +559,7 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
     return;
   }
 
+#ifdef BINJI_HACK
   // This is a string of the form ~username/, look up this user's entry in the
   // password database.
   struct passwd *Entry = nullptr;
@@ -548,6 +575,7 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
   Path.clear();
   Path.append(Entry->pw_dir, Entry->pw_dir + strlen(Entry->pw_dir));
   llvm::sys::path::append(Path, Storage);
+#endif
 }
 
 
@@ -630,8 +658,10 @@ std::error_code setPermissions(const Twine &Path, perms Permissions) {
   SmallString<128> PathStorage;
   StringRef P = Path.toNullTerminatedStringRef(PathStorage);
 
+#ifdef BINJI_HACK
   if (::chmod(P.begin(), Permissions))
     return std::error_code(errno, std::generic_category());
+#endif
   return std::error_code();
 }
 
@@ -662,6 +692,7 @@ std::error_code setLastAccessAndModificationTime(int FD, TimePoint<> AccessTime,
 
 std::error_code mapped_file_region::init(int FD, uint64_t Offset,
                                          mapmode Mode) {
+#ifdef BINJI_HACK
   assert(Size != 0);
 
   int flags = (Mode == readwrite) ? MAP_SHARED : MAP_PRIVATE;
@@ -689,6 +720,7 @@ std::error_code mapped_file_region::init(int FD, uint64_t Offset,
   Mapping = ::mmap(nullptr, Size, prot, flags, FD, Offset);
   if (Mapping == MAP_FAILED)
     return std::error_code(errno, std::generic_category());
+#endif
   return std::error_code();
 }
 
@@ -702,8 +734,10 @@ mapped_file_region::mapped_file_region(int fd, mapmode mode, size_t length,
 }
 
 mapped_file_region::~mapped_file_region() {
+#ifdef BINJI_HACK
   if (Mapping)
     ::munmap(Mapping, Size);
+#endif
 }
 
 size_t mapped_file_region::size() const {
@@ -982,11 +1016,13 @@ namespace path {
 
 bool home_directory(SmallVectorImpl<char> &result) {
   char *RequestedDir = getenv("HOME");
+#ifdef BINJI_HACK
   if (!RequestedDir) {
     struct passwd *pw = getpwuid(getuid());
     if (pw && pw->pw_dir)
       RequestedDir = pw->pw_dir;
   }
+#endif
   if (!RequestedDir)
     return false;
 
