@@ -95,7 +95,9 @@ static std::error_code getHostID(SmallVectorImpl<char> &HostID) {
   char HostName[256];
   HostName[255] = 0;
   HostName[0] = 0;
+#ifdef BINJI_HACK
   gethostname(HostName, 255);
+#endif
   StringRef HostNameRef(HostName);
   HostID.append(HostNameRef.begin(), HostNameRef.end());
 

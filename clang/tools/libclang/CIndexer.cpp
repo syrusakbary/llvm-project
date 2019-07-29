@@ -32,7 +32,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#else
+#elif defined BINJI_HACK
 #include <dlfcn.h>
 #endif
 
@@ -64,7 +64,7 @@ const std::string &CIndexer::getClangResourcesPath() {
 #endif
 
   LibClangPath += llvm::sys::path::parent_path(path);
-#else
+#elif defined BINJI_HACK
   // This silly cast below avoids a C++ warning.
   Dl_info info;
   if (dladdr((void *)(uintptr_t)clang_createTranslationUnit, &info) == 0)

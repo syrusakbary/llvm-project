@@ -101,6 +101,18 @@ namespace llvm {
 namespace sys  {
 namespace fs {
 
+char* realpath(const char* path, char* resolved_path) {
+  fprintf(stderr, "realpath(\"%s\", \"%s\")\n", path,
+          resolved_path ? resolved_path : "(null)");
+  // TODO(BINJI_HACK): implement
+  if (resolved_path == nullptr) {
+    resolved_path = strdup(path);
+  } else {
+    strncpy(resolved_path, path, PATH_MAX);
+  }
+  return resolved_path;
+}
+
 const file_t kInvalidFile = -1;
 
 #if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||     \
@@ -299,7 +311,13 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
     } else
       break;
   }
+#else
+  const char* root = "/";
+  result.append(root, root + 2);
 #endif
+
+  StringRef ResultStr(result.begin(), result.size());
+  fprintf(stderr, "current_path(), result=%s\n", ResultStr.str().c_str());
 
   result.set_size(strlen(result.data()));
   return std::error_code();
@@ -308,6 +326,8 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
 std::error_code set_current_path(const Twine &path) {
   SmallString<128> path_storage;
   StringRef p = path.toNullTerminatedStringRef(path_storage);
+
+  fprintf(stderr, "set_current_path(%s)\n", p.begin());
 
 #ifdef BINJI_HACK
   if (::chdir(p.begin()) == -1)
@@ -437,6 +457,7 @@ std::error_code is_local(const Twine &Path, bool &Result) {
 
   Result = is_local_impl(Vfs);
 #else
+  fprintf(stderr, "is_local(%s)\n", Path.str().c_str());
   Result = true;
 #endif
   return std::error_code();
@@ -558,6 +579,8 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
     Path.insert(Path.begin() + 1, Storage.begin() + 1, Storage.end());
     return;
   }
+
+  fprintf(stderr, "expandTildeExpr(%s)\n", PathStr.str().c_str());
 
 #ifdef BINJI_HACK
   // This is a string of the form ~username/, look up this user's entry in the
@@ -928,7 +951,12 @@ std::error_code openFileForRead(const Twine &Name, int &ResultFD,
     StringRef P = Name.toNullTerminatedStringRef(Storage);
 
     // Use ::realpath to get the real path name
+#ifdef BINJI_HACK
     if (::realpath(P.begin(), Buffer) != nullptr)
+#else
+    fprintf(stderr, "openFileForRead(%s)\n", P.begin());
+    if (realpath(P.begin(), Buffer) != nullptr)
+#endif
       RealPath->append(Buffer, Buffer + strlen(Buffer));
   }
 #endif
@@ -1004,7 +1032,12 @@ std::error_code real_path(const Twine &path, SmallVectorImpl<char> &dest,
   SmallString<128> Storage;
   StringRef P = path.toNullTerminatedStringRef(Storage);
   char Buffer[PATH_MAX];
+#ifdef BINJI_HACK
   if (::realpath(P.begin(), Buffer) == nullptr)
+#else
+  fprintf(stderr, "real_path(%s)\n", P.begin());
+  if (realpath(P.begin(), Buffer) == nullptr)
+#endif
     return std::error_code(errno, std::generic_category());
   dest.append(Buffer, Buffer + strlen(Buffer));
   return std::error_code();
@@ -1016,6 +1049,7 @@ namespace path {
 
 bool home_directory(SmallVectorImpl<char> &result) {
   char *RequestedDir = getenv("HOME");
+  fprintf(stderr, "home_directory\n");
 #ifdef BINJI_HACK
   if (!RequestedDir) {
     struct passwd *pw = getpwuid(getuid());

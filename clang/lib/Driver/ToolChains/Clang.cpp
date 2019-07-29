@@ -709,7 +709,7 @@ static void appendUserToPath(SmallVectorImpl<char> &Result) {
   }
 
 // Fallback to user id.
-#ifdef LLVM_ON_UNIX
+#if defined BINJI_HACK && defined LLVM_ON_UNIX
   std::string UID = llvm::utostr(getuid());
 #else
   // FIXME: Windows seems to have an 'SID' that might work.
