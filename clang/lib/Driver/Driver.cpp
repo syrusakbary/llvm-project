@@ -1160,7 +1160,7 @@ bool Driver::getCrashDiagnosticFile(StringRef ReproCrashFilename,
     CrashDiagDir = "/";
   path::append(CrashDiagDir, "Library/Logs/DiagnosticReports");
   int PID =
-#if LLVM_ON_UNIX
+#if defined BINJI_HACK && LLVM_ON_UNIX
       getpid();
 #else
       0;

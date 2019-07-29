@@ -36,7 +36,9 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cmath>
+#ifdef BINJI_HACK
 #include <csignal>
+#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -326,7 +328,11 @@ static GenericValue lle_X_exit(FunctionType *FT, ArrayRef<GenericValue> Args) {
 static GenericValue lle_X_abort(FunctionType *FT, ArrayRef<GenericValue> Args) {
   //FIXME: should we report or raise here?
   //report_fatal_error("Interpreted program raised SIGABRT");
+#ifdef BINJI_HACK
   raise (SIGABRT);
+#else
+  abort();
+#endif
   return GenericValue();
 }
 
