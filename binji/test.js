@@ -1,7 +1,3 @@
-const trace = true;
-const disableTrace = new Set([
-  'fd_write',
-]);
 const environ = {
   USER : 'alice',
 };
@@ -19,6 +15,10 @@ class NotImplemented extends Error {
   constructor(modname, fieldname) {
     super(`${modname}.${fieldname} not implemented.`);
   }
+}
+
+class AbortError extends Error {
+  constructor(msg = 'abort') { super(msg); }
 }
 
 class AssertError extends Error {
@@ -47,9 +47,6 @@ function FieldProxy(base, modname) {
         let realfunc = base[fieldname];
         // print(modname, fieldname, realfunc);
         let func = (...args) => {
-          if (trace && !(disableTrace.has(fieldname))) {
-            print(`${modname}.${fieldname}(${args})`);
-          }
           if (typeof realfunc !== 'undefined') {
             return realfunc(...args);
           } else {
@@ -72,10 +69,12 @@ class Memory {
   constructor(memory) {
     this.memory = memory;
     this.buffer = this.memory.buffer;
+    this.u8 = new Uint8Array(this.buffer);
+    this.u32 = new Uint32Array(this.buffer);
   }
 
   check() {
-    if (this.buffer.byteLength == 0) {
+    if (this.buffer.byteLength === 0) {
       this.buffer = this.memory.buffer;
       this.u8 = new Uint8Array(this.buffer);
       this.u32 = new Uint32Array(this.buffer);
@@ -156,10 +155,19 @@ let wasi_unstable = {
     }
     clangmem.write32(argv_ptrs, 0);
     return ESUCCESS;
+  },
+  random_get: function(buf, buf_len) {
+    let data = new Uint8Array(clangmem.buffer, buf, buf_len);
+    for (let i = 0; i < buf_len; ++i) {
+      data[i] = (Math.random() * 256) | 0;
+    }
   }
 };
 
 const env = {
+  abort : function() {
+    throw new AbortError();
+  },
   host_write : function(fd, iovs, iovs_len, nwritten_out) {
     clangmem.check();
     assert(fd <= 2);
@@ -177,12 +185,16 @@ const env = {
     print(str);
     return ESUCCESS;
   },
+  memfs_log : function(buf, len) {
+    memfsmem.check();
+    print(memfsmem.readStr(buf, len));
+  },
   copy_out : function(clang_dst, memfs_src, size) {
     clangmem.check();
     const dst = new Uint8Array(clangmem.buffer, clang_dst, size);
     memfsmem.check();
     const src = new Uint8Array(memfsmem.buffer, memfs_src, size);
-    print(`copy_out(${clang_dst}, ${memfs_src}, ${size})`);
+    print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)}, ${size})`);
     dst.set(src);
   },
   copy_in : function(memfs_dst, clang_src, size) {
@@ -190,13 +202,16 @@ const env = {
     const dst = new Uint8Array(memfsmem.buffer, memfs_dst, size);
     clangmem.check();
     const src = new Uint8Array(clangmem.buffer, clang_src, size);
-    print(`copy_in(${memfs_dst}, ${clang_src}, ${size})`);
+    print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)}, ${size})`);
     dst.set(src);
   },
 };
 
 const memfs = getInstance('memfs', {env});
 memfsmem = new Memory(memfs.exports.memory);
+print('initializing memfs...');
+memfs.exports.init();
+print('done.');
 
 // Fill in some WASI implementations from memfs.
 Object.assign(wasi_unstable, memfs.exports);
