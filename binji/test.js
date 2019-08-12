@@ -164,6 +164,30 @@ let wasi_unstable = {
   }
 };
 
+class HostWriteBuffer {
+  constructor() {
+    this.buffer = '';
+  }
+
+  write(str) {
+    this.buffer += str;
+    while (true) {
+      let newline = this.buffer.indexOf('\n');
+      if (newline === -1) {
+        break;
+      }
+      print(this.buffer.slice(0, newline));
+      this.buffer = this.buffer.slice(newline + 1);
+    }
+  }
+
+  flush() {
+    print(this.buffer);
+  }
+}
+
+let host_write_buffer = new HostWriteBuffer();
+
 const env = {
   abort : function() {
     throw new AbortError();
@@ -182,7 +206,7 @@ const env = {
       size += len;
     }
     clangmem.write32(nwritten_out, size);
-    print(str);
+    host_write_buffer.write(str);
     return ESUCCESS;
   },
   memfs_log : function(buf, len) {
@@ -232,4 +256,5 @@ clangmem = new Memory(clang.exports.memory);
 
 print('running...');
 clang.exports._start();
+host_write_buffer.flush();
 print('done.');
