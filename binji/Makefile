@@ -9,4 +9,4 @@ memfs.o: memfs.c
 	${clang} --sysroot=${sysroot} -O2 -Wall -Wextra -Wno-unused-parameter -c -o $@ $<
 
 stb_sprintf.o: stb_sprintf.h
-	${clang} --sysroot=${sysroot} -DSTB_SPRINTF_IMPLEMENTATION -x c -O0 -c -o $@ $<
+	${clang} --sysroot=${sysroot} -DSTB_SPRINTF_IMPLEMENTATION -x c -O2 -c -o $@ $<
