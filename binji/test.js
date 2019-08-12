@@ -194,7 +194,7 @@ const env = {
     const dst = new Uint8Array(clangmem.buffer, clang_dst, size);
     memfsmem.check();
     const src = new Uint8Array(memfsmem.buffer, memfs_src, size);
-    print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)}, ${size})`);
+    // print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)}, ${size})`);
     dst.set(src);
   },
   copy_in : function(memfs_dst, clang_src, size) {
@@ -202,7 +202,7 @@ const env = {
     const dst = new Uint8Array(memfsmem.buffer, memfs_dst, size);
     clangmem.check();
     const src = new Uint8Array(clangmem.buffer, clang_src, size);
-    print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)}, ${size})`);
+    // print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)}, ${size})`);
     dst.set(src);
   },
 };
