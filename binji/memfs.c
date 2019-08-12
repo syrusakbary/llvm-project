@@ -8,6 +8,7 @@
 #include "stb_sprintf.h"
 
 #define TRACE 1
+#define DEBUG 0
 
 #define WASM_EXPORT __attribute__((__visibility__("default")))
 #define MAX_FDS 4096
@@ -46,6 +47,12 @@ void Assert(bool result, const char* cond) {
 #define tracef(...) (void)0
 #endif
 
+#if DEBUG
+#define debugf(...) logf(__VA_ARGS__)
+#else
+#define debugf(...) (void)0
+#endif
+
 #define TRACE_ERRNO(errno) tracef("!!  " #errno), errno
 
 void TraceFDStat(__wasi_fdstat_t* stat) {
@@ -71,7 +78,6 @@ typedef struct DirectoryContents DirectoryContents;
 struct FileContents {
   void* data;
   __wasi_filesize_t size;
-  __wasi_filesize_t capacity;
 };
 
 struct DirectoryContents {
@@ -85,7 +91,7 @@ struct Node {
     __wasi_inode_t next_free;
   };
   char *name;      // Null-terminated.
-  size_t name_len; // Length w/o null.
+  size_t name_len; // Length w/o \0.
   __wasi_filestat_t stat;
   union {
     FileContents file;
@@ -96,6 +102,7 @@ struct Node {
 struct FDesc {
   __wasi_fdstat_t stat;
   __wasi_inode_t inode;
+  __wasi_filesize_t offset;
   bool is_prestat;
 };
 
@@ -133,10 +140,8 @@ static char* GetDirentName(__wasi_dirent_t* dirent) {
 }
 
 static __wasi_dirent_t *GetNextDirent(Node* dirnode, __wasi_dirent_t *dirent) {
-#if 0
-  tracef("!!  GetNextDirent(dirnode:%p, dirent:%p) d_next:%" PRIu64 " size:%zu",
+  debugf("!!  GetNextDirent(dirnode:%p, dirent:%p) d_next:%" PRIu64 " size:%zu",
          dirnode, dirent, dirent->d_next, dirnode->dir.size);
-#endif
   if (dirent->d_next < dirnode->dir.size) {
     return (__wasi_dirent_t *)((char *)dirnode->dir.dirents + dirent->d_next);
   }
@@ -156,12 +161,14 @@ static NewNodeResult NewEmptyNode(void) {
   return (NewNodeResult){.node = node, .inode = inode};
 }
 
-static NewNodeResult NewNode(Node *parent, const char *name,
+static NewNodeResult NewNode(Node *parent, const char *name, size_t name_len,
                              __wasi_filestat_t stat) {
   NewNodeResult result = NewEmptyNode();
   result.node->parent = GetInode(parent ? parent : result.node);
-  result.node->name = strdup(name);
-  result.node->name_len = strlen(name);
+  result.node->name_len = name_len;
+  result.node->name = malloc(name_len + 1);
+  memcpy(result.node->name, name, name_len);
+  result.node->name[name_len] = 0;
   result.node->stat = stat;
   result.node->stat.st_ino = result.inode;
   return result;
@@ -185,19 +192,76 @@ static void AddDirent(Node *dirnode, const char *name, size_t name_len,
   dirnode->dir.dirents = new_dirents;
   dirnode->dir.size = new_size;
 
-#if 0
-  tracef("!!AddDirent(dirnode:%p, \"%.*s\", %" PRIu64
+  debugf("!!AddDirent(dirnode:%p, \"%.*s\", %" PRIu64
          ") new_size:%zu new_dirents:%p dirent:%p",
          dirnode, (int)name_len, name, inode, new_size, new_dirents, dirent);
+}
+
+#if 0
+static __wasi_dirent_t *FindDirentByInode(Node *dirnode, __wasi_inode_t inode) {
+  __wasi_dirent_t *dirent = dirnode->dir.dirents;
+  while (dirent) {
+    if (dirent->d_ino == inode) {
+      return dirent;
+    } else {
+      dirent = GetNextDirent(dirnode, dirent);
+    }
+  }
+  return NULL;
+}
 #endif
+
+static __wasi_dirent_t *FindDirentByName(Node *dirnode, const char *name,
+                                         size_t name_len) {
+  __wasi_dirent_t *dirent = dirnode->dir.dirents;
+  while (dirent) {
+    const char *dirent_name = GetDirentName(dirent);
+    size_t len = dirent->d_namlen;
+    debugf("!!  \"%.*s\" ==? \"%.*s\"", (int)name_len, name, (int)len,
+           dirent_name);
+    if (len == name_len && memcmp(name, dirent_name, len) == 0) {
+      debugf("!!  yes");
+      return dirent;
+    } else {
+      // No match.
+      __wasi_dirent_t *new_dirent = GetNextDirent(dirnode, dirent);
+      debugf("!!  no, dirent:%p=>%p", dirent, new_dirent);
+      dirent = new_dirent;
+    }
+  }
+  return NULL;
+}
+
+static __wasi_errno_t RemoveDirent(Node* dirnode, __wasi_dirent_t* dirent) {
+  const void* next_dirent = GetNextDirent(dirnode, dirent);
+  size_t new_size = dirnode->dir.size - dirent->d_next;
+  memmove(dirent, next_dirent, new_size);
+  dirnode->dir.dirents = realloc(dirnode->dir.dirents, new_size);
+  // TODO remove unused node
+  return __WASI_ESUCCESS;
 }
 
 static void SetFileContents(Node* node, void* data, __wasi_filesize_t size) {
   node->file.data = malloc(size);
   memcpy(node->file.data, data, size);
   node->file.size = size;
-  node->file.capacity = size;
   node->stat.st_size = size;
+}
+
+static NewNodeResult NewFileNode(Node *parent, const char *name,
+                                 size_t name_len, __wasi_filestat_t stat) {
+  ASSERT(parent);
+  NewNodeResult result = NewNode(parent, name, name_len, stat);
+  AddDirent(parent, name, name_len, result.inode);
+  return result;
+}
+
+static NewNodeResult NewDirectoryNode(Node *parent, const char *name,
+                                      size_t name_len, __wasi_filestat_t stat) {
+  NewNodeResult result = NewNode(parent, name, name_len, stat);
+  AddDirent(result.node, ".", 1, result.inode);
+  AddDirent(result.node, "..", 2, result.node->parent);
+  return result;
 }
 
 typedef struct {
@@ -287,31 +351,30 @@ static __wasi_fdstat_t GetDirectoryFDStat(void) {
 }
 
 static void CreateStdFds(void) {
-  NewNodeResult in = NewNode(NULL, "stdin", GetCharDeviceStat(kStdinDevice));
+  NewNodeResult in = NewNode(NULL, "stdin", 5, GetCharDeviceStat(kStdinDevice));
   NewFDResult in_fd = NewFD(in.node, GetFileFDStat(0), false);
   ASSERT(in_fd.fd == 0);
 
-  NewNodeResult out = NewNode(NULL, "stdout", GetCharDeviceStat(kStdoutDevice));
+  NewNodeResult out =
+      NewNode(NULL, "stdout", 6, GetCharDeviceStat(kStdoutDevice));
   NewFDResult out_fd =
       NewFD(out.node, GetFileFDStat(__WASI_FDFLAG_APPEND), false);
   ASSERT(out_fd.fd == 1);
 
-  NewNodeResult err = NewNode(NULL, "stderr", GetCharDeviceStat(kStderrDevice));
+  NewNodeResult err =
+      NewNode(NULL, "stderr", 6, GetCharDeviceStat(kStderrDevice));
   NewFDResult err_fd =
       NewFD(err.node, GetFileFDStat(__WASI_FDFLAG_APPEND), false);
   ASSERT(err_fd.fd == 2);
 
-  NewNodeResult root = NewNode(NULL, "", GetDirectoryStat());
+  NewNodeResult root = NewDirectoryNode(NULL, "", 0, GetDirectoryStat());
   NewFDResult root_fd = NewFD(root.node, GetDirectoryFDStat(), true);
   ASSERT(root_fd.fd == 3);
-  AddDirent(root.node, ".", 1, root.inode);
-  AddDirent(root.node, "..", 2, root.inode);
 
   // XXX
   static char contents[] = "int main() { return 42; }\n";
-  NewNodeResult testc = NewNode(root.node, "test.c", GetFileStat());
+  NewNodeResult testc = NewFileNode(root.node, "test.c", 6, GetFileStat());
   SetFileContents(testc.node, contents, sizeof(contents) - 1);
-  AddDirent(root.node, testc.node->name, testc.node->name_len, testc.inode);
 }
 
 WASM_EXPORT
@@ -389,6 +452,7 @@ WASM_EXPORT __wasi_errno_t fd_pread(__wasi_fd_t fd, const __wasi_iovec_t *iovs,
   size_t total_len = 0;
   for (size_t i = 0; i < iovs_len; ++i) {
     __wasi_iovec_t* iov = &iovs_copy[i];
+    debugf("!!  {buf:%p, buf_len:%zu}", iov->buf, iov->buf_len);
     size_t len = iov->buf_len;
     if (offset + len < node->file.size) {
       len = node->file.size - offset;
@@ -457,28 +521,94 @@ WASM_EXPORT __wasi_errno_t fd_seek(__wasi_fd_t fd, __wasi_filedelta_t offset,
                                    __wasi_filesize_t *newoffset) {
   tracef("!!fd_seek(fd:%u, offset:%" PRIu64 ", buf_len:%u, newoffset:%p)", fd,
          offset, whence, newoffset);
-  return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+  FDesc* fdesc = GetFDesc(fd);
+  if (fdesc == NULL) {
+    return TRACE_ERRNO(__WASI_EBADF);
+  }
+  Node* node = GetNode(fdesc->inode);
+  __wasi_filesize_t size = node->stat.st_size;
+  switch (whence) {
+    case __WASI_WHENCE_CUR: fdesc->offset += offset; break;
+    case __WASI_WHENCE_END: fdesc->offset = size + offset; break;
+    case __WASI_WHENCE_SET: fdesc->offset = offset; break;
+    default:
+      return TRACE_ERRNO(__WASI_EINVAL);
+  }
+  if (fdesc->offset > size) {
+    fdesc->offset = size;
+  }
+  copy_out(newoffset, &fdesc->offset, sizeof(*newoffset));
+  return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
 WASM_EXPORT __wasi_errno_t fd_write(__wasi_fd_t fd, const __wasi_ciovec_t *iovs,
                                     size_t iovs_len, size_t *nwritten) {
-  // XXX
-  if (fd <= 2) {
-    return host_write(fd, iovs, iovs_len, nwritten);
+  FDesc* fdesc = GetFDesc(fd);
+  if (fdesc == NULL) {
+    return TRACE_ERRNO(__WASI_EBADF);
   }
+  Node* node = GetNode(fdesc->inode);
+  switch (node->stat.st_dev) {
+    case kStdinDevice:
+    case kStdoutDevice:
+    case kStderrDevice:
+      return host_write(node->stat.st_dev, iovs, iovs_len, nwritten);
+
+    case kMemDevice:
+      // Handled below.
+      break;
+
+    default:
+      ASSERT(false);
+      return __WASI_ENODEV;
+  }
+
   tracef("!!fd_write(fd:%u, iovs:%p, iovs_len:%zu, nwritten:%p)", fd, iovs,
          iovs_len, nwritten);
-  return __WASI_EBADF;
+
+  // TODO
+  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+
+  size_t total_len = 0;
+  __wasi_iovec_t iovs_copy[iovs_len];
+  copy_in(iovs_copy, iovs, sizeof(*iovs) * iovs_len);
+  for (size_t i = 0; i < iovs_len; ++i) {
+    total_len += iovs_copy[i].buf_len;
+  }
+
+  __wasi_filesize_t offset = fdesc->offset;
+  __wasi_filesize_t end = offset + total_len;
+  if (end > node->file.size) {
+    void* new_data = realloc(node->file.data, end);
+    ASSERT(new_data);
+    node->file.data = new_data;
+    node->file.size = end;
+  }
+
+  for (size_t i = 0; i < iovs_len; ++i) {
+    __wasi_iovec_t* iov = &iovs_copy[i];
+    size_t len = iov->buf_len;
+    debugf("!!  {buf:%p, buf_len:%zu}", iov->buf, iov->buf_len);
+    ASSERT(offset + len <= end);
+    copy_in((char *)node->file.data + offset, iov->buf, len);
+    offset += len;
+  }
+  copy_out(nwritten, &total_len, sizeof(*nwritten));
+  tracef("!!  nwritten=%zu", total_len);
+  return __WASI_ESUCCESS;
 }
 
 typedef struct {
-  Node* node;
-  Node* parent;
+  Node *node;              // NULL if path doesn't exist.
+  Node *parent;            // Never NULL.
+  __wasi_dirent_t *dirent; // NULL if path doesn't exist.
+  const char *name;        // Shared w/ |path| passed to LookupPath.
+  size_t name_len;         // Length w/o \0.
 } LookupResult;
 
 static LookupResult LookupPath(Node *dirnode, const char *path,
                                size_t path_len) {
-//  tracef("!!LookupPath(%p, \"%.*s\")", dirnode, (int)path_len, path);
+  debugf("!!LookupPath(%p, \"%.*s\")", dirnode, (int)path_len, path);
   ASSERT(dirnode && dirnode->stat.st_filetype == __WASI_FILETYPE_DIRECTORY);
 
   // Find path component to look up [0, sep).
@@ -486,35 +616,38 @@ static LookupResult LookupPath(Node *dirnode, const char *path,
   for (sep = 0; sep < path_len && path[sep] != '/'; ++sep) {
   }
 
-  __wasi_dirent_t* dirent = dirnode->dir.dirents;
-  while (dirent) {
-    const char* dirent_name = GetDirentName(dirent);
-    size_t len = dirent->d_namlen;
-//   tracef("!!  \"%.*s\" ==? \"%.*s\"", (int)sep, path, (int)len, dirent_name);
-    if (len == sep && memcmp(path, dirent_name, len) == 0) {
-//      tracef("!!  yes");
-      // Match, search next component.
-      Node* node = GetNode(dirent->d_ino);
-      if (sep == path_len) {
-        // End of path.
-        return (LookupResult){.node = node, .parent = dirnode};
-      } else if (dirent->d_type == __WASI_FILETYPE_DIRECTORY) {
-        // Look in next directory.
-        ASSERT(sep < path_len);
-        return LookupPath(node, path + sep + 1, path_len - sep - 1);
-      } else {
-        // Not a directory; fail.
-        break;
-      }
+  bool is_last_component = sep == path_len;
+
+  __wasi_dirent_t* dirent = FindDirentByName(dirnode, path, sep);
+  if (dirent == NULL) {
+    // Nothing in this directory with that name; if this is the last component,
+    // set the parent in case the caller wants to create a new file. If this
+    // wasn't the last component, don't set the parent, since the path wasn't
+    // fully resolved.
+    if (is_last_component) {
+      return (LookupResult){.parent = dirnode, .name = path, .name_len = sep};
     } else {
-      // No match.
-      __wasi_dirent_t* new_dirent = GetNextDirent(dirnode, dirent);
-//      tracef("!!  no, dirent:%p=>%p", dirent, new_dirent);
-      dirent = new_dirent;
+      return (LookupResult){};
     }
   }
-  // Nothing in this directory with that name, fail.
-  return (LookupResult){.node = NULL, .parent = NULL};
+
+  // Match, search next component.
+  Node *node = GetNode(dirent->d_ino);
+  if (is_last_component) {
+    // End of path.
+    return (LookupResult){.node = node,
+                          .parent = dirnode,
+                          .dirent = dirent,
+                          .name = path,
+                          .name_len = sep};
+  } else if (dirent->d_type == __WASI_FILETYPE_DIRECTORY) {
+    // Look in next directory.
+    ASSERT(sep < path_len);
+    return LookupPath(node, path + sep + 1, path_len - sep - 1);
+  } else {
+    // Not a directory; fail.
+    return (LookupResult){};
+  }
 }
 
 WASM_EXPORT __wasi_errno_t path_create_directory(__wasi_fd_t fd,
@@ -562,15 +695,38 @@ path_open(__wasi_fd_t dirfd, __wasi_lookupflags_t dirflags, const char *path,
     return TRACE_ERRNO(__WASI_EBADF);
   }
   LookupResult lookup = LookupPath(GetNode(fdesc->inode), g_path_buf, path_len);
-  if (!lookup.node) {
+  if ((oflags & __WASI_O_EXCL) && lookup.node) {
+    return TRACE_ERRNO(__WASI_EEXIST);
+  }
+  if (!(oflags & (__WASI_O_CREAT | __WASI_O_EXCL)) && !lookup.node) {
     return TRACE_ERRNO(__WASI_ENOENT);
   }
+  if ((oflags & __WASI_O_DIRECTORY) &&
+      (lookup.node->stat.st_filetype != __WASI_FILETYPE_DIRECTORY)) {
+    return TRACE_ERRNO(__WASI_ENOTDIR);
+  }
 
-  ASSERT(oflags == 0); // TODO
+  if ((oflags & __WASI_O_TRUNC) && lookup.node) {
+    // TODO handle errors
+    ASSERT(lookup.node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+    lookup.node->file.size = 0;
+  }
 
+  if ((oflags & __WASI_O_CREAT) && !lookup.node) {
+    if (!lookup.parent) {
+      return TRACE_ERRNO(__WASI_ENOENT);
+    }
+
+    NewNodeResult new_node =
+        NewFileNode(lookup.parent, lookup.name, lookup.name_len, GetFileStat());
+    lookup.node = new_node.node;
+  }
+
+  __wasi_rights_t inherited = fdesc->stat.fs_rights_inheriting;
   __wasi_fdstat_t stat = {.fs_flags = fs_flags,
-                          .fs_rights_base = fs_rights_base,
-                          .fs_rights_inheriting = fs_rights_inheriting};
+                          .fs_rights_base = inherited & fs_rights_base,
+                          .fs_rights_inheriting =
+                              inherited & fs_rights_inheriting};
   NewFDResult result = NewFD(lookup.node, stat, false);
   tracef("!!  fd=%u", result.fd);
   copy_out(fd, &result.fd, sizeof(*fd));
@@ -600,17 +756,53 @@ WASM_EXPORT __wasi_errno_t path_rename(__wasi_fd_t old_fd, const char *old_path,
                                        size_t old_path_len, __wasi_fd_t new_fd,
                                        const char *new_path,
                                        size_t new_path_len) {
+  ASSERT(old_path_len + new_path_len < MAX_PATH);
+  char* old_path_copy = g_path_buf;
+  char* new_path_copy = g_path_buf + old_path_len;
+  copy_in(old_path_copy, old_path, old_path_len);
+  copy_in(new_path_copy, new_path, new_path_len);
+
   tracef("!!path_rename(old_fd:%u, old_path:\"%.*s\", new_fd:%u, "
          "new_path:\"%.*s\")",
-         old_fd, (int)old_path_len, old_path, new_fd, (int)new_path_len,
-         new_path);
-  return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+         old_fd, (int)old_path_len, old_path_copy, new_fd, (int)new_path_len,
+         new_path_copy);
+  FDesc* old_fdesc = GetFDesc(old_fd);
+  FDesc* new_fdesc = GetFDesc(new_fd);
+  if (old_fdesc == NULL || new_fdesc == NULL) {
+    return TRACE_ERRNO(__WASI_EBADF);
+  }
+
+  LookupResult old_lookup =
+      LookupPath(GetNode(old_fdesc->inode), old_path_copy, old_path_len);
+  if (!old_lookup.node) {
+    return TRACE_ERRNO(__WASI_ENOENT);
+  }
+  LookupResult new_lookup =
+      LookupPath(GetNode(new_fdesc->inode), new_path_copy, new_path_len);
+  if (!new_lookup.parent) {
+    return TRACE_ERRNO(__WASI_ENOENT);
+  }
+
+  // TODO rename directory.
+  ASSERT(old_lookup.node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  // TODO overwriting an existing file
+  ASSERT(!new_lookup.node);
+
+  RemoveDirent(old_lookup.parent, old_lookup.dirent);
+  AddDirent(new_lookup.parent, new_lookup.name, new_lookup.name_len,
+            GetInode(old_lookup.node));
+  return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
 WASM_EXPORT __wasi_errno_t path_symlink(const char *old_path,
                                         size_t old_path_len, __wasi_fd_t fd,
                                         const char *new_path,
                                         size_t new_path_len) {
+  ASSERT(old_path_len + new_path_len < MAX_PATH);
+  char* old_path_copy = g_path_buf;
+  char* new_path_copy = g_path_buf + old_path_len;
+  copy_in(old_path_copy, old_path, old_path_len);
+  copy_in(new_path_copy, new_path, new_path_len);
   tracef("!!path_symlink(old_path:\"%.*s\", new_path:\"%.*s\")",
          (int)old_path_len, old_path, (int)new_path_len, new_path);
   return TRACE_ERRNO(__WASI_ENOTCAPABLE);
