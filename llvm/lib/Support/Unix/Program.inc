@@ -94,7 +94,7 @@ ErrorOr<std::string> sys::findProgramByName(StringRef Name,
 }
 
 static bool RedirectIO(Optional<StringRef> Path, int FD, std::string* ErrMsg) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (!Path) // Noop
     return false;
   std::string File;
@@ -181,7 +181,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program,
                     ArrayRef<StringRef> Args, Optional<ArrayRef<StringRef>> Env,
                     ArrayRef<Optional<StringRef>> Redirects,
                     unsigned MemoryLimit, std::string *ErrMsg) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (!llvm::sys::fs::exists(Program)) {
     if (ErrMsg)
       *ErrMsg = std::string("Executable \"") + Program.str() +
@@ -342,7 +342,7 @@ namespace llvm {
 
 ProcessInfo sys::Wait(const ProcessInfo &PI, unsigned SecondsToWait,
                       bool WaitUntilTerminates, std::string *ErrMsg) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   struct sigaction Act, Old;
   assert(PI.Pid && "invalid pid to wait on, process not started?");
 

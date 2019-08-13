@@ -2371,7 +2371,7 @@ inline const char* StrNCpy(char* dest, const char* src, size_t n) {
 // defined there.
 
 #if !GTEST_OS_WINDOWS_MOBILE && !GTEST_OS_WINDOWS_PHONE && !GTEST_OS_WINDOWS_RT
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 inline int ChDir(const char* dir) { return chdir(dir); }
 #else
 inline int ChDir(const char* dir) { return 0; }

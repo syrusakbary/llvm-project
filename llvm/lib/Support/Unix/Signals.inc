@@ -281,7 +281,7 @@ static void RegisterHandlers() { // Not signal-safe.
     assert(Index < array_lengthof(RegisteredSignalInfo) &&
            "Out of space for signal handlers!");
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
     struct sigaction NewHandler;
 
     NewHandler.sa_handler = SignalHandler;
@@ -302,7 +302,7 @@ static void RegisterHandlers() { // Not signal-safe.
 }
 
 static void UnregisterHandlers() {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   // Restore all of the signal handlers to how they were before we showed up.
   for (unsigned i = 0, e = NumRegisteredSignals.load(); i != e; ++i) {
     sigaction(RegisteredSignalInfo[i].SigNo,
@@ -325,7 +325,7 @@ static RETSIGTYPE SignalHandler(int Sig) {
   // instead of recursing in the signal handler.
   UnregisterHandlers();
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   // Unmask all potentially blocked kill signals.
   sigset_t SigMask;
   sigfillset(&SigMask);

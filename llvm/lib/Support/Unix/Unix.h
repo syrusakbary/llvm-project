@@ -29,7 +29,7 @@
 #include <cstring>
 #include <string>
 #include <sys/types.h>
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 #include <sys/wait.h>
 #endif
 

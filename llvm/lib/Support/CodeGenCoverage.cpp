@@ -91,7 +91,7 @@ bool CodeGenCoverage::emit(StringRef CoveragePrefix,
     // more than one process is ever writing to the same file at the same time.
     std::string Pid =
 #if LLVM_ON_UNIX
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
         llvm::to_string(::getpid());
 #else
         llvm::to_string(31415);

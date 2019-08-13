@@ -19,7 +19,7 @@
 namespace llvm {
   namespace sys {
     Watchdog::Watchdog(unsigned int seconds) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 #ifdef HAVE_UNISTD_H
       alarm(seconds);
 #endif
@@ -27,7 +27,7 @@ namespace llvm {
     }
 
     Watchdog::~Watchdog() {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 #ifdef HAVE_UNISTD_H
       alarm(0);
 #endif

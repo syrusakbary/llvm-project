@@ -45,7 +45,7 @@ extern "C" void __clear_cache(void *, void*);
 namespace {
 
 int getPosixProtectionFlags(unsigned Flags) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   switch (Flags & llvm::sys::Memory::MF_RWE_MASK) {
   case llvm::sys::Memory::MF_READ:
     return PROT_READ;
@@ -95,7 +95,7 @@ Memory::allocateMappedMemory(size_t NumBytes,
   if (NumBytes == 0)
     return MemoryBlock();
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 
   // On platforms that have it, we can use MAP_ANON to get a memory-mapped
   // page without file backing, but we need a fallback of opening /dev/zero
@@ -177,7 +177,7 @@ Memory::releaseMappedMemory(MemoryBlock &M) {
   if (M.Address == nullptr || M.AllocatedSize == 0)
     return std::error_code();
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (0 != ::munmap(M.Address, M.AllocatedSize))
     return std::error_code(errno, std::generic_category());
 #endif
@@ -203,7 +203,7 @@ Memory::protectMappedMemory(const MemoryBlock &M, unsigned Flags) {
 
   bool InvalidateCache = (Flags & MF_EXEC);
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 #if defined(__arm__) || defined(__aarch64__)
   // Certain ARM implementations treat icache clear instruction as a memory read,
   // and CPU segfaults on trying to clear cache on !PROT_READ page.  Therefore we need
