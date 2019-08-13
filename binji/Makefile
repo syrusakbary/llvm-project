@@ -14,4 +14,4 @@ stb_sprintf.o: stb_sprintf.h
 
 .PHONY: test
 test:
-	${d8} test.js -- -cc1 -emit-obj test.c -o test.o
+	${d8} test.js

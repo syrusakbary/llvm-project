@@ -1,11 +1,3 @@
-const environ = {
-  USER : 'alice',
-};
-const argv = ['clang', ...arguments];
-let memfsmem;
-let clangmem;
-
-
 class ProcExit {
   constructor(code) { this.msg = `process exited with code ${code}.`; }
   toString() { return this.msg; }
@@ -38,6 +30,14 @@ function getModule(filename) {
 function getInstance(filename, imports) {
   const mod = getModule(filename);
   return new WebAssembly.Instance(mod, imports);
+}
+
+function getImportObject(obj, names) {
+  const result = {};
+  for (let name of names) {
+    result[name] = obj[name].bind(obj);
+  }
+  return result;
 }
 
 const ESUCCESS = 0;
@@ -107,127 +107,175 @@ class HostWriteBuffer {
   }
 }
 
-const host_write_buffer = new HostWriteBuffer();
+class MemFS {
+  constructor() {
+    this.hostWriteBuffer = new HostWriteBuffer();
+    this.hostMem_ = null;  // Set later when wired up to application.
 
-const env = {
-  abort : function() {
-    throw new AbortError();
-  },
-  host_write : function(fd, iovs, iovs_len, nwritten_out) {
-    clangmem.check();
+    // Imports for memfs module.
+    const env = getImportObject(
+        this, [ 'abort', 'host_write', 'memfs_log', 'copy_in', 'copy_out' ]);
+
+    this.instance = getInstance('memfs', {env});
+    this.exports = this.instance.exports;
+    this.mem = new Memory(this.exports.memory);
+    print('initializing memfs...');
+    this.exports.init();
+    print('done.');
+  }
+
+  set hostMem(mem) {
+    this.hostMem_ = mem;
+  }
+
+  hostFlush() {
+    this.hostWriteBuffer.flush();
+  }
+
+  abort() { throw new AbortError(); }
+
+  host_write(fd, iovs, iovs_len, nwritten_out) {
+    this.hostMem_.check();
     assert(fd <= 2);
     let size = 0;
     let str = '';
     for (let i = 0; i < iovs_len; ++i) {
-      const buf = clangmem.read32(iovs);
+      const buf = this.hostMem_.read32(iovs);
       iovs += 4;
-      const len = clangmem.read32(iovs);
+      const len = this.hostMem_.read32(iovs);
       iovs += 4;
-      str += clangmem.readStr(buf, len);
+      str += this.hostMem_.readStr(buf, len);
       size += len;
     }
-    clangmem.write32(nwritten_out, size);
-    host_write_buffer.write(str);
+    this.hostMem_.write32(nwritten_out, size);
+    this.hostWriteBuffer.write(str);
     return ESUCCESS;
-  },
-  memfs_log : function(buf, len) {
-    memfsmem.check();
-    print(memfsmem.readStr(buf, len));
-  },
-  copy_out : function(clang_dst, memfs_src, size) {
-    clangmem.check();
-    const dst = new Uint8Array(clangmem.buffer, clang_dst, size);
-    memfsmem.check();
-    const src = new Uint8Array(memfsmem.buffer, memfs_src, size);
-    // print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)}, ${size})`);
+  }
+
+  memfs_log(buf, len) {
+    this.mem.check();
+    print(this.mem.readStr(buf, len));
+  }
+
+  copy_out(clang_dst, memfs_src, size) {
+    this.hostMem_.check();
+    const dst = new Uint8Array(this.hostMem_.buffer, clang_dst, size);
+    this.mem.check();
+    const src = new Uint8Array(this.mem.buffer, memfs_src, size);
+    // print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)},
+    // ${size})`);
     dst.set(src);
-  },
-  copy_in : function(memfs_dst, clang_src, size) {
-    memfsmem.check();
-    const dst = new Uint8Array(memfsmem.buffer, memfs_dst, size);
-    clangmem.check();
-    const src = new Uint8Array(clangmem.buffer, clang_src, size);
-    // print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)}, ${size})`);
+  }
+
+  copy_in(memfs_dst, clang_src, size) {
+    this.mem.check();
+    const dst = new Uint8Array(this.mem.buffer, memfs_dst, size);
+    this.hostMem_.check();
+    const src = new Uint8Array(this.hostMem_.buffer, clang_src, size);
+    // print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)},
+    // ${size})`);
     dst.set(src);
-  },
-};
-
-const memfs = getInstance('memfs', {env});
-memfsmem = new Memory(memfs.exports.memory);
-print('initializing memfs...');
-memfs.exports.init();
-print('done.');
+  }
+}
 
 
-const wasi_unstable = {
-  proc_exit: function(code) {
+class App {
+  constructor(memfs, name, ...args) {
+    this.argv = [name, ...args];
+    this.environ = {USER : 'alice'};
+    this.memfs = memfs;
+
+    const wasi_unstable = getImportObject(this, [
+      'proc_exit', 'environ_sizes_get', 'environ_get', 'args_sizes_get',
+      'args_get', 'random_get', 'clock_time_get', 'poll_oneoff'
+    ]);
+
+    // Fill in some WASI implementations from memfs.
+    Object.assign(wasi_unstable, this.memfs.exports);
+
+    this.instance = getInstance(name, {wasi_unstable});
+    this.exports = this.instance.exports;
+    this.mem = new Memory(this.exports.memory);
+    this.memfs.hostMem = this.mem;
+
+    print(`running ${name}...`);
+    this.instance.exports._start();
+    print('done.');
+  }
+
+  proc_exit(code) {
     throw new ProcExit(code);
-  },
-  environ_sizes_get: function(environ_count_out, environ_buf_size_out) {
-    clangmem.check();
+  }
+
+  environ_sizes_get(environ_count_out, environ_buf_size_out) {
+    this.mem.check();
     let size = 0;
-    const names = Object.getOwnPropertyNames(environ);
+    const names = Object.getOwnPropertyNames(this.environ);
     for (const name of names) {
-      const value = environ[name];
+      const value = this.environ[name];
       // +2 to account for = and \0 in "name=value\0".
       size += name.length + value.length + 2;
     }
-    clangmem.write64(environ_count_out, names.length);
-    clangmem.write64(environ_buf_size_out, size);
+    this.mem.write64(environ_count_out, names.length);
+    this.mem.write64(environ_buf_size_out, size);
     return ESUCCESS;
-  },
-  environ_get: function(environ_ptrs, environ_buf) {
-    clangmem.check();
-    const names = Object.getOwnPropertyNames(environ);
+  }
+
+  environ_get(environ_ptrs, environ_buf) {
+    this.mem.check();
+    const names = Object.getOwnPropertyNames(this.environ);
     for (const name of names) {
-      clangmem.write32(environ_ptrs, environ_buf);
+      this.mem.write32(environ_ptrs, environ_buf);
       environ_ptrs += 4;
-      environ_buf += clangmem.writeStr(environ_buf, `${name}=${environ[name]}`);
+      environ_buf +=
+          this.mem.writeStr(environ_buf, `${name}=${this.environ[name]}`);
     }
-    clangmem.write32(environ_ptrs, 0);
+    this.mem.write32(environ_ptrs, 0);
     return ESUCCESS;
-  },
-  args_sizes_get: function(argc_out, argv_buf_size_out) {
-    clangmem.check();
+  }
+
+  args_sizes_get(argc_out, argv_buf_size_out) {
+    print(JSON.stringify(this.argv));
+    this.mem.check();
     let size = 0;
-    for (let arg of argv) {
+    for (let arg of this.argv) {
       size += arg.length + 1;  // "arg\0".
     }
-    clangmem.write64(argc_out, argv.length);
-    clangmem.write64(argv_buf_size_out, size);
+    this.mem.write64(argc_out, this.argv.length);
+    this.mem.write64(argv_buf_size_out, size);
     return ESUCCESS;
-  },
-  args_get: function(argv_ptrs, argv_buf) {
-    clangmem.check();
-    for (let arg of argv) {
-      clangmem.write32(argv_ptrs, argv_buf);
+  }
+
+  args_get(argv_ptrs, argv_buf) {
+    this.mem.check();
+    for (let arg of this.argv) {
+      this.mem.write32(argv_ptrs, argv_buf);
       argv_ptrs += 4;
-      argv_buf += clangmem.writeStr(argv_buf, arg);
+      argv_buf += this.mem.writeStr(argv_buf, arg);
     }
-    clangmem.write32(argv_ptrs, 0);
+    this.mem.write32(argv_ptrs, 0);
     return ESUCCESS;
-  },
-  random_get: function(buf, buf_len) {
-    const data = new Uint8Array(clangmem.buffer, buf, buf_len);
+  }
+
+  random_get(buf, buf_len) {
+    const data = new Uint8Array(this.mem.buffer, buf, buf_len);
     for (let i = 0; i < buf_len; ++i) {
       data[i] = (Math.random() * 256) | 0;
     }
-  },
-  clock_time_get: function(clock_id, precision, time_out) {
+  }
+
+  clock_time_get(clock_id, precision, time_out) {
     throw new NotImplemented('wasi_unstable', 'clock_time_get');
-  },
-  poll_oneoff: function(in_ptr, out_ptr, nsubscriptions, nevents_out) {
+  }
+
+  poll_oneoff(in_ptr, out_ptr, nsubscriptions, nevents_out) {
     throw new NotImplemented('wasi_unstable', 'poll_oneoff');
   }
-};
+}
 
-// Fill in some WASI implementations from memfs.
-Object.assign(wasi_unstable, memfs.exports);
+const memfs = new MemFS();
+// new App(memfs, 'clang', '--help');
+new App(memfs, 'clang', '-cc1', '-emit-obj', 'test.c', '-o', 'test.o');
+// new App(memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
 
-const clang = getInstance('clang', {wasi_unstable});
-clangmem = new Memory(clang.exports.memory);
-
-print('running...');
-clang.exports._start();
-host_write_buffer.flush();
-print('done.');
+memfs.hostFlush();
