@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wasi/core.h>
@@ -234,9 +235,21 @@ static __wasi_dirent_t *FindDirentByName(Node *dirnode, const char *name,
 
 static __wasi_errno_t RemoveDirent(Node* dirnode, __wasi_dirent_t* dirent) {
   const void* next_dirent = GetNextDirent(dirnode, dirent);
-  size_t new_size = dirnode->dir.size - dirent->d_next;
-  memmove(dirent, next_dirent, new_size);
+  size_t dirent_offset = (char*)dirent - (char*)dirnode->dir.dirents;
+  size_t dirent_size = dirent->d_next - dirent_offset;
+  size_t move_size = dirnode->dir.size - dirent->d_next;
+  memmove(dirent, next_dirent, move_size);
+  // We now need to fix up the d_next fields, since they still include the
+  // space required for the removed dirent.
+  while (dirent) {
+    dirent->d_next -= dirent_size;
+    dirent = GetNextDirent(dirnode, dirent);
+  }
+
+  size_t new_size = dirnode->dir.size - dirent_size;
   dirnode->dir.dirents = realloc(dirnode->dir.dirents, new_size);
+  dirnode->dir.size = new_size;
+
   // TODO remove unused node
   return __WASI_ESUCCESS;
 }
@@ -246,6 +259,31 @@ static void SetFileContents(Node* node, void* data, __wasi_filesize_t size) {
   memcpy(node->file.data, data, size);
   node->file.size = size;
   node->stat.st_size = size;
+}
+
+static void EnsureFileSize(Node* node, __wasi_filesize_t new_size) {
+  // TODO
+  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  __wasi_filesize_t old_size = node->file.size;
+  if (new_size > old_size) {
+    void *new_data = realloc(node->file.data, new_size);
+    ASSERT(new_data);
+    node->file.data = new_data;
+    node->file.size = new_size;
+    node->stat.st_size = new_size;
+    memset((char*)new_data + old_size, 0, new_size - old_size);
+  }
+}
+
+static void SetFileSize(Node* node, __wasi_filesize_t new_size) {
+  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  __wasi_filesize_t old_size = node->file.size;
+  if (new_size > old_size) {
+    EnsureFileSize(node, new_size);
+  } else {
+    node->file.size = new_size;
+    node->stat.st_size = new_size;
+  }
 }
 
 static NewNodeResult NewFileNode(Node *parent, const char *name,
@@ -372,7 +410,7 @@ static void CreateStdFds(void) {
   ASSERT(root_fd.fd == 3);
 
   // XXX
-  static char contents[] = "int main() { return 42; }\n";
+  static char contents[] = "int add(int x, int y) { return x + y; }\n";
   NewNodeResult testc = NewFileNode(root.node, "test.c", 6, GetFileStat());
   SetFileContents(testc.node, contents, sizeof(contents) - 1);
 }
@@ -387,7 +425,17 @@ WASM_EXPORT __wasi_errno_t fd_allocate(__wasi_fd_t fd, __wasi_filesize_t offset,
                                        __wasi_filesize_t len) {
   tracef("!!fd_allocate(fd:%u, offset:%" PRIu64 ", len:%" PRIu64 ")", fd,
          offset, len);
-  return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+  FDesc* fdesc = GetFDesc(fd);
+  if (fdesc == NULL) {
+    return TRACE_ERRNO(__WASI_EBADF);
+  }
+  Node* node = GetNode(fdesc->inode);
+  if (node->stat.st_dev != kMemDevice) {
+    return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+  }
+
+  // TODO allocate memory?
+  return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
 WASM_EXPORT __wasi_errno_t fd_close(__wasi_fd_t fd) {
@@ -397,6 +445,41 @@ WASM_EXPORT __wasi_errno_t fd_close(__wasi_fd_t fd) {
     return TRACE_ERRNO(__WASI_EBADF);
   }
   fdesc->stat.fs_filetype = __WASI_FILETYPE_UNKNOWN;
+#if 1
+  Node* node = GetNode(fdesc->inode);
+  __wasi_filesize_t addr = 0;
+  __wasi_filesize_t next_line = 16;
+  __wasi_filesize_t size = node->file.size;
+
+  char buffer[100];
+
+  uint8_t *data = node->file.data;
+  for (; addr < size; addr = next_line) {
+    next_line = addr + 16;
+    if (next_line > size) {
+      next_line = size;
+    }
+
+    char* p = buffer;
+    size_t buf_len = sizeof(buffer);
+    size_t len = stbsp_snprintf(buffer, buf_len, "%08x:", addr);
+    p += len;
+    buf_len -= len;
+
+    for (; addr < next_line; addr += 2) {
+      len = stbsp_snprintf(p, buf_len, " %02x", data[addr]);
+      p += len;
+      buf_len -= len;
+      if (addr + 1 < next_line) {
+        len = stbsp_snprintf(p, buf_len, "%02x", data[addr + 1]);
+        p += len;
+        buf_len -= len;
+      }
+    }
+
+    memfs_log(buffer, p - buffer);
+  }
+#endif
   return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
@@ -433,7 +516,12 @@ WASM_EXPORT __wasi_errno_t fd_filestat_get(__wasi_fd_t fd,
 WASM_EXPORT __wasi_errno_t fd_filestat_set_size(__wasi_fd_t fd,
                                                 __wasi_filesize_t st_size) {
   tracef("!!fd_filestat_set_size(fd:%u, buf:%" PRIu64 ")", fd, st_size);
-  return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+  FDesc* fdesc = GetFDesc(fd);
+  if (fdesc == NULL) {
+    return TRACE_ERRNO(__WASI_EBADF);
+  }
+  SetFileSize(GetNode(fdesc->inode), st_size);
+  return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
 WASM_EXPORT __wasi_errno_t fd_pread(__wasi_fd_t fd, const __wasi_iovec_t *iovs,
@@ -537,8 +625,9 @@ WASM_EXPORT __wasi_errno_t fd_seek(__wasi_fd_t fd, __wasi_filedelta_t offset,
   if (fdesc->offset > size) {
     fdesc->offset = size;
   }
+  tracef("!!  newoffset=%" PRIu64, fdesc->offset);
   copy_out(newoffset, &fdesc->offset, sizeof(*newoffset));
-  return TRACE_ERRNO(__WASI_ESUCCESS);
+  return __WASI_ESUCCESS;
 }
 
 WASM_EXPORT __wasi_errno_t fd_write(__wasi_fd_t fd, const __wasi_ciovec_t *iovs,
@@ -568,6 +657,8 @@ WASM_EXPORT __wasi_errno_t fd_write(__wasi_fd_t fd, const __wasi_ciovec_t *iovs,
 
   // TODO
   ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  // TODO
+  ASSERT(!(fdesc->stat.fs_flags & __WASI_FDFLAG_APPEND));
 
   size_t total_len = 0;
   __wasi_iovec_t iovs_copy[iovs_len];
@@ -576,14 +667,10 @@ WASM_EXPORT __wasi_errno_t fd_write(__wasi_fd_t fd, const __wasi_ciovec_t *iovs,
     total_len += iovs_copy[i].buf_len;
   }
 
+
   __wasi_filesize_t offset = fdesc->offset;
   __wasi_filesize_t end = offset + total_len;
-  if (end > node->file.size) {
-    void* new_data = realloc(node->file.data, end);
-    ASSERT(new_data);
-    node->file.data = new_data;
-    node->file.size = end;
-  }
+  EnsureFileSize(node, end);
 
   for (size_t i = 0; i < iovs_len; ++i) {
     __wasi_iovec_t* iov = &iovs_copy[i];
@@ -593,6 +680,8 @@ WASM_EXPORT __wasi_errno_t fd_write(__wasi_fd_t fd, const __wasi_ciovec_t *iovs,
     copy_in((char *)node->file.data + offset, iov->buf, len);
     offset += len;
   }
+
+  fdesc->offset = offset;
   copy_out(nwritten, &total_len, sizeof(*nwritten));
   tracef("!!  nwritten=%zu", total_len);
   return __WASI_ESUCCESS;

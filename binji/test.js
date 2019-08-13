@@ -1,5 +1,8 @@
 class ProcExit {
-  constructor(code) { this.msg = `process exited with code ${code}.`; }
+  constructor(code) {
+    this.code = code;
+    this.msg = `process exited with code ${code}.`;
+  }
   toString() { return this.msg; }
 };
 
@@ -23,13 +26,29 @@ function assert(cond) {
   }
 }
 
+function profile(name, f) {
+  const start = performance.now();
+  try {
+    return f();
+  } catch (exn) {
+    throw exn;
+  } finally {
+    const time = performance.now() - start;
+    print(`|| ${name} took ${time.toFixed(2)}ms`);
+  }
+}
+
 function getModule(filename) {
-  return new WebAssembly.Module(readbuffer(filename));
+  const buffer = profile(`readbuffer(${filename})`, () => readbuffer(filename));
+  const module = profile(`new Module`, () => new WebAssembly.Module(buffer));
+  return module;
 }
 
 function getInstance(filename, imports) {
   const mod = getModule(filename);
-  return new WebAssembly.Instance(mod, imports);
+  const instance =
+      profile(`new Instance`, () => new WebAssembly.Instance(mod, imports));
+  return instance;
 }
 
 function getImportObject(obj, names) {
@@ -119,9 +138,8 @@ class MemFS {
     this.instance = getInstance('memfs', {env});
     this.exports = this.instance.exports;
     this.mem = new Memory(this.exports.memory);
-    print('initializing memfs...');
-    this.exports.init();
-    print('done.');
+
+    profile('init memfs', () => this.exports.init());
   }
 
   set hostMem(mem) {
@@ -180,7 +198,7 @@ class MemFS {
 
 
 class App {
-  constructor(memfs, name, ...args) {
+  constructor(filename, memfs, name, ...args) {
     this.argv = [name, ...args];
     this.environ = {USER : 'alice'};
     this.memfs = memfs;
@@ -193,14 +211,20 @@ class App {
     // Fill in some WASI implementations from memfs.
     Object.assign(wasi_unstable, this.memfs.exports);
 
-    this.instance = getInstance(name, {wasi_unstable});
+    this.instance = getInstance(filename, {wasi_unstable});
     this.exports = this.instance.exports;
     this.mem = new Memory(this.exports.memory);
     this.memfs.hostMem = this.mem;
 
-    print(`running ${name}...`);
-    this.instance.exports._start();
-    print('done.');
+    try {
+      profile(`run ${name}`, () => this.exports._start());
+    } catch(exn) {
+      if (exn instanceof ProcExit) {
+        if (exn.code != 0) {
+          throw exn;
+        }
+      }
+    }
   }
 
   proc_exit(code) {
@@ -235,7 +259,6 @@ class App {
   }
 
   args_sizes_get(argc_out, argv_buf_size_out) {
-    print(JSON.stringify(this.argv));
     this.mem.check();
     let size = 0;
     for (let arg of this.argv) {
@@ -274,8 +297,10 @@ class App {
 }
 
 const memfs = new MemFS();
-// new App(memfs, 'clang', '--help');
-new App(memfs, 'clang', '-cc1', '-emit-obj', 'test.c', '-o', 'test.o');
-// new App(memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
+// new App('clang', memfs, 'clang', '--help');
+new App('clang', memfs, 'clang', '-cc1', '-emit-obj', 'test.c', '-o', 'test.o');
+// new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
+
+new App('lld', memfs, 'wasm-ld', '--verbose', '--no-threads', '--no-entry', 'test.o', '-o', 'test')
 
 memfs.hostFlush();
