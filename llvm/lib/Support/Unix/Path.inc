@@ -33,7 +33,7 @@
 #endif
 
 #include <dirent.h>
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 #include <pwd.h>
 #endif
 
@@ -59,7 +59,7 @@
 #include <sys/types.h>
 #if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__FreeBSD__) &&   \
     !defined(__linux__) && !defined(__FreeBSD_kernel__)
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 #include <sys/statvfs.h>
 #define STATVFS statvfs
 #define FSTATVFS fstatvfs
@@ -101,6 +101,7 @@ namespace llvm {
 namespace sys  {
 namespace fs {
 
+#ifdef BINJI_HACK
 char* realpath(const char* path, char* resolved_path) {
   fprintf(stderr, "realpath(\"%s\", \"%s\")\n", path,
           resolved_path ? resolved_path : "(null)");
@@ -112,6 +113,7 @@ char* realpath(const char* path, char* resolved_path) {
   }
   return resolved_path;
 }
+#endif
 
 const file_t kInvalidFile = -1;
 
@@ -238,7 +240,7 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   char link_path[MAXPATHLEN];
   if (realpath(DLInfo.dli_fname, link_path))
     return link_path;
-#elif defined BINJI_HACK
+#elif !defined BINJI_HACK
 #error GetMainExecutable is not implemented on this host yet.
 #endif
   return "";
@@ -261,7 +263,7 @@ uint32_t file_status::getLinkCount() const {
 }
 
 ErrorOr<space_info> disk_space(const Twine &Path) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   struct STATVFS Vfs;
   if (::STATVFS(Path.str().c_str(), &Vfs))
     return std::error_code(errno, std::generic_category());
@@ -300,7 +302,7 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
   result.reserve(1024);
 #endif
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   while (true) {
     if (::getcwd(result.data(), result.capacity()) == nullptr) {
       // See if there was a real error.
@@ -329,7 +331,7 @@ std::error_code set_current_path(const Twine &path) {
 
   fprintf(stderr, "set_current_path(%s)\n", p.begin());
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (::chdir(p.begin()) == -1)
     return std::error_code(errno, std::generic_category());
 #endif
@@ -405,7 +407,7 @@ std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
   return std::error_code();
 }
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 static bool is_local_impl(struct STATVFS &Vfs) {
 #if defined(__linux__) || defined(__GNU__)
 #ifndef NFS_SUPER_MAGIC
@@ -450,7 +452,7 @@ static bool is_local_impl(struct STATVFS &Vfs) {
 #endif
 
 std::error_code is_local(const Twine &Path, bool &Result) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   struct STATVFS Vfs;
   if (::STATVFS(Path.str().c_str(), &Vfs))
     return std::error_code(errno, std::generic_category());
@@ -464,7 +466,7 @@ std::error_code is_local(const Twine &Path, bool &Result) {
 }
 
 std::error_code is_local(int FD, bool &Result) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   struct STATVFS Vfs;
   if (::FSTATVFS(FD, &Vfs))
     return std::error_code(errno, std::generic_category());
@@ -582,7 +584,7 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
 
   fprintf(stderr, "expandTildeExpr(%s)\n", PathStr.str().c_str());
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   // This is a string of the form ~username/, look up this user's entry in the
   // password database.
   struct passwd *Entry = nullptr;
@@ -681,7 +683,7 @@ std::error_code setPermissions(const Twine &Path, perms Permissions) {
   SmallString<128> PathStorage;
   StringRef P = Path.toNullTerminatedStringRef(PathStorage);
 
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (::chmod(P.begin(), Permissions))
     return std::error_code(errno, std::generic_category());
 #endif
@@ -715,7 +717,7 @@ std::error_code setLastAccessAndModificationTime(int FD, TimePoint<> AccessTime,
 
 std::error_code mapped_file_region::init(int FD, uint64_t Offset,
                                          mapmode Mode) {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   assert(Size != 0);
 
   int flags = (Mode == readwrite) ? MAP_SHARED : MAP_PRIVATE;
@@ -757,7 +759,7 @@ mapped_file_region::mapped_file_region(int fd, mapmode mode, size_t length,
 }
 
 mapped_file_region::~mapped_file_region() {
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (Mapping)
     ::munmap(Mapping, Size);
 #endif
@@ -951,7 +953,7 @@ std::error_code openFileForRead(const Twine &Name, int &ResultFD,
     StringRef P = Name.toNullTerminatedStringRef(Storage);
 
     // Use ::realpath to get the real path name
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
     if (::realpath(P.begin(), Buffer) != nullptr)
 #else
     fprintf(stderr, "openFileForRead(%s)\n", P.begin());
@@ -1032,7 +1034,7 @@ std::error_code real_path(const Twine &path, SmallVectorImpl<char> &dest,
   SmallString<128> Storage;
   StringRef P = path.toNullTerminatedStringRef(Storage);
   char Buffer[PATH_MAX];
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (::realpath(P.begin(), Buffer) == nullptr)
 #else
   fprintf(stderr, "real_path(%s)\n", P.begin());
@@ -1050,7 +1052,7 @@ namespace path {
 bool home_directory(SmallVectorImpl<char> &result) {
   char *RequestedDir = getenv("HOME");
   fprintf(stderr, "home_directory\n");
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
   if (!RequestedDir) {
     struct passwd *pw = getpwuid(getuid());
     if (pw && pw->pw_dir)

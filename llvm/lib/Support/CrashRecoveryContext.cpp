@@ -13,7 +13,7 @@
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/ThreadLocal.h"
-#ifdef BINJI_HACK
+#ifndef BINJI_HACK
 #include <setjmp.h>
 #endif
 using namespace llvm;
@@ -33,7 +33,7 @@ struct CrashRecoveryContextImpl {
   const CrashRecoveryContextImpl *Next;
 
   CrashRecoveryContext *CRC;
-#if BINJI_HACK
+#ifndef BINJI_HACK
   ::jmp_buf JumpBuffer;
 #endif
   volatile unsigned Failed : 1;
@@ -70,7 +70,7 @@ public:
     // FIXME: Stash the backtrace.
 
     // Jump back to the RunSafely we were called under.
-#if BINJI_HACK
+#ifndef BINJI_HACK
     longjmp(JumpBuffer, 1);
 #else
     abort();
@@ -322,7 +322,7 @@ static void CrashRecoverySignalHandler(int Signal) {
     return;
   }
 
-#if BINJI_HACK
+#ifndef BINJI_HACK
   // Unblock the signal we received.
   sigset_t SigMask;
   sigemptyset(&SigMask);
@@ -335,7 +335,7 @@ static void CrashRecoverySignalHandler(int Signal) {
 }
 
 static void installExceptionOrSignalHandlers() {
-#if BINJI_HACK
+#ifndef BINJI_HACK
   // Setup the signal handler.
   struct sigaction Handler;
   Handler.sa_handler = CrashRecoverySignalHandler;
@@ -349,7 +349,7 @@ static void installExceptionOrSignalHandlers() {
 }
 
 static void uninstallExceptionOrSignalHandlers() {
-#if BINJI_HACK
+#ifndef BINJI_HACK
   // Restore the previous signal handlers.
   for (unsigned i = 0; i != NumSignals; ++i)
     sigaction(Signals[i], &PrevActions[i], nullptr);
@@ -360,7 +360,7 @@ static void uninstallExceptionOrSignalHandlers() {
 
 bool CrashRecoveryContext::RunSafely(function_ref<void()> Fn) {
   // If crash recovery is disabled, do nothing.
-#if BINJI_HACK
+#ifndef BINJI_HACK
   if (gCrashRecoveryEnabled) {
     assert(!Impl && "Crash recovery context already initialized!");
     CrashRecoveryContextImpl *CRCI = new CrashRecoveryContextImpl(this);
