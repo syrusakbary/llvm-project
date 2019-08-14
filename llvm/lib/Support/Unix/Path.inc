@@ -829,8 +829,12 @@ std::error_code mapped_file_region::init(int FD, uint64_t Offset,
   Mapping = ::mmap(nullptr, Size, prot, flags, FD, Offset);
   if (Mapping == MAP_FAILED)
     return std::error_code(errno, std::generic_category());
-#endif
   return std::error_code();
+#else
+  // Fail.
+  errno = EINVAL;
+  return std::error_code(errno, std::generic_category());
+#endif
 }
 
 mapped_file_region::mapped_file_region(int fd, mapmode mode, size_t length,
