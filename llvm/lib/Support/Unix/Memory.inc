@@ -167,8 +167,11 @@ Memory::allocateMappedMemory(size_t NumBytes,
   return Result;
 
 #else
-  // NOTE(binji): Fail for now.
-  return MemoryBlock();
+  MemoryBlock Result;
+  Result.Address = ::malloc(NumBytes);
+  Result.AllocatedSize = NumBytes;
+  Result.Flags = 0;
+  return Result;
 #endif
 }
 
@@ -180,6 +183,8 @@ Memory::releaseMappedMemory(MemoryBlock &M) {
 #ifndef BINJI_HACK
   if (0 != ::munmap(M.Address, M.AllocatedSize))
     return std::error_code(errno, std::generic_category());
+#else
+  ::free(M.Address);
 #endif
 
   M.Address = nullptr;
