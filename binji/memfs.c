@@ -116,6 +116,7 @@ static Node g_nodes[MAX_NODES];
 static FDesc g_fdescs[MAX_FDS];
 static __wasi_inode_t g_next_inode;
 static char g_path_buf[MAX_PATH];
+static Node* g_root_node;
 
 static void InitInodes(void) {
   g_next_inode = 0;
@@ -254,13 +255,6 @@ static __wasi_errno_t RemoveDirent(Node* dirnode, __wasi_dirent_t* dirent) {
   return __WASI_ESUCCESS;
 }
 
-static void SetFileContents(Node* node, void* data, __wasi_filesize_t size) {
-  node->file.data = malloc(size);
-  memcpy(node->file.data, data, size);
-  node->file.size = size;
-  node->stat.st_size = size;
-}
-
 static void EnsureFileSize(Node* node, __wasi_filesize_t new_size) {
   // TODO
   ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
@@ -299,6 +293,9 @@ static NewNodeResult NewDirectoryNode(Node *parent, const char *name,
   NewNodeResult result = NewNode(parent, name, name_len, stat);
   AddDirent(result.node, ".", 1, result.inode);
   AddDirent(result.node, "..", 2, result.node->parent);
+  if (parent != NULL) {
+    AddDirent(parent, name, name_len, result.inode);
+  }
   return result;
 }
 
@@ -408,11 +405,7 @@ static void CreateStdFds(void) {
   NewNodeResult root = NewDirectoryNode(NULL, "", 0, GetDirectoryStat());
   NewFDResult root_fd = NewFD(root.node, GetDirectoryFDStat(), true);
   ASSERT(root_fd.fd == 3);
-
-  // XXX
-  static char contents[] = "int add(int x, int y) { return x + y; }\n";
-  NewNodeResult testc = NewFileNode(root.node, "test.c", 6, GetFileStat());
-  SetFileContents(testc.node, contents, sizeof(contents) - 1);
+  g_root_node = root.node;
 }
 
 WASM_EXPORT
@@ -445,7 +438,7 @@ WASM_EXPORT __wasi_errno_t fd_close(__wasi_fd_t fd) {
     return TRACE_ERRNO(__WASI_EBADF);
   }
   fdesc->stat.fs_filetype = __WASI_FILETYPE_UNKNOWN;
-#if 1
+#if DEBUG
   Node* node = GetNode(fdesc->inode);
   __wasi_filesize_t addr = 0;
   __wasi_filesize_t next_line = 16;
@@ -902,4 +895,64 @@ WASM_EXPORT __wasi_errno_t path_unlink_file(__wasi_fd_t fd, const char *path,
   copy_in(g_path_buf, path, path_len);
   tracef("!!path_symlink(fd:%u, path:\"%.*s\")", fd, (int)path_len, g_path_buf);
   return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+}
+
+
+// Helper functions for reading/writing files from JS.
+typedef uint32_t wasi_inode32_t;
+typedef uint32_t wasi_filesize32_t;
+
+WASM_EXPORT void* GetPathBuf(void) {
+  return g_path_buf;
+}
+
+WASM_EXPORT size_t GetPathBufLen(void) {
+  return sizeof(g_path_buf);
+}
+
+WASM_EXPORT wasi_inode32_t FindNode(size_t path_len) {
+  LookupResult lookup = LookupPath(g_root_node, g_path_buf, path_len);
+  ASSERT(lookup.node);
+  __wasi_inode_t inode = GetInode(lookup.node);
+  tracef("!!FindNode(path:\"%.*s\") => %" PRIu64, (int)path_len, g_path_buf,
+         inode);
+  return (wasi_inode32_t)inode;
+}
+
+WASM_EXPORT wasi_inode32_t AddDirectoryNode(size_t path_len) {
+  LookupResult lookup = LookupPath(g_root_node, g_path_buf, path_len);
+  ASSERT(lookup.parent);
+  NewNodeResult new_node = NewDirectoryNode(
+      lookup.parent, lookup.name, lookup.name_len, GetDirectoryStat());
+  __wasi_inode_t inode = GetInode(new_node.node);
+  tracef("!!AddDirectoryNode(path:\"%.*s\") => %" PRIu64, (int)path_len,
+         g_path_buf, inode);
+  return (wasi_inode32_t)inode;
+}
+
+WASM_EXPORT wasi_inode32_t AddFileNode(size_t path_len,
+                                       wasi_filesize32_t file_size) {
+  LookupResult lookup = LookupPath(g_root_node, g_path_buf, path_len);
+  ASSERT(lookup.parent);
+  NewNodeResult new_node =
+      NewFileNode(lookup.parent, lookup.name, lookup.name_len, GetFileStat());
+  EnsureFileSize(new_node.node, file_size);
+  tracef("!!AddFileNode(path:\"%.*s\") => %" PRIu64, (int)path_len,
+         g_path_buf, new_node.inode);
+  return (wasi_inode32_t)new_node.inode;
+}
+
+WASM_EXPORT void* GetFileNodeAddress(wasi_inode32_t inode) {
+  Node* node = GetNode(inode);
+  ASSERT(node);
+  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  tracef("!!GetFileNodeAddress(inode:%u) => %p", inode, node->file.data);
+  return node->file.data;
+}
+
+WASM_EXPORT wasi_filesize32_t GetFileNodeSize(wasi_inode32_t inode) {
+  Node* node = GetNode(inode);
+  ASSERT(node);
+  tracef("!!GetFileNodeSize(inode:%u) => %" PRIu64, inode, node->file.size);
+  return (wasi_filesize32_t)node->file.size;
 }

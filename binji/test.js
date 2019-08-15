@@ -93,14 +93,21 @@ class Memory {
     return str;
   }
 
+  // Null-terminated string.
   writeStr(o, str) {
+    o += this.writeStrBuf(o, str);
+    this.write8(o++, 0);
+    return str.length + 1;
+  }
+
+  // String contents w/o null-terminator.
+  writeStrBuf(o, str) {
     for (let i = 0; i < str.length; i++) {
       const c = str.charCodeAt(i);
       assert(c < 256);
       this.write8(o++, c);
     }
-    this.write8(o++, 0);
-    return str.length + 1;
+    return str.length;
   }
 };
 
@@ -122,7 +129,9 @@ class HostWriteBuffer {
   }
 
   flush() {
-    print(this.buffer);
+    if (this.buffer.length > 0) {
+      print(this.buffer);
+    }
   }
 }
 
@@ -144,6 +153,20 @@ class MemFS {
 
   set hostMem(mem) {
     this.hostMem_ = mem;
+  }
+
+  addDirectory(path) {
+    this.mem.check();
+    this.mem.writeStrBuf(this.exports.GetPathBuf(), path);
+    this.exports.AddDirectoryNode(path.length);
+  }
+
+  addFile(path, contents) {
+    this.mem.check();
+    this.mem.writeStrBuf(this.exports.GetPathBuf(), path);
+    const inode = this.exports.AddFileNode(path.length, contents.length);
+    const addr = this.exports.GetFileNodeAddress(inode);
+    this.mem.writeStrBuf(addr, contents);
   }
 
   hostFlush() {
@@ -296,11 +319,16 @@ class App {
   }
 }
 
-const memfs = new MemFS();
-// new App('clang', memfs, 'clang', '--help');
-new App('clang', memfs, 'clang', '-cc1', '-emit-obj', 'test.c', '-o', 'test.o');
-// new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
+profile('total time', () => {
+  const memfs = new MemFS();
+  memfs.addDirectory('foo');
+  memfs.addFile('foo/test.c', 'int add(int x, int y) { return x + y; }\n')
 
-new App('lld', memfs, 'wasm-ld', '--verbose', '--no-threads', '--no-entry', 'test.o', '-o', 'test')
+  // new App('clang', memfs, 'clang', '--help');
+  new App('clang', memfs, 'clang', '-cc1', '-emit-obj', 'foo/test.c', '-o', 'test.o');
+  // new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
 
-memfs.hostFlush();
+  new App('lld', memfs, 'wasm-ld', '--verbose', '--no-threads', '--no-entry', 'test.o', '-o', 'test')
+
+  memfs.hostFlush();
+});
