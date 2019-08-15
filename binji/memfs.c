@@ -94,6 +94,7 @@ struct Node {
   char *name;      // Null-terminated.
   size_t name_len; // Length w/o \0.
   __wasi_filestat_t stat;
+  uint32_t fdesc_count;
   union {
     FileContents file;
     DirectoryContents dir;
@@ -124,6 +125,43 @@ static void InitInodes(void) {
     g_nodes[i].next_free = i + 1;
   }
   g_nodes[MAX_NODES - 1].next_free = INVALID_INODE;
+}
+
+void DebugPrintNodeContents(struct Node* node) {
+#if DEBUG
+  __wasi_filesize_t addr = 0;
+  __wasi_filesize_t next_line = 16;
+  __wasi_filesize_t size = node->file.size;
+
+  char buffer[100];
+
+  uint8_t *data = node->file.data;
+  for (; addr < size; addr = next_line) {
+    next_line = addr + 16;
+    if (next_line > size) {
+      next_line = size;
+    }
+
+    char *p = buffer;
+    size_t buf_len = sizeof(buffer);
+    size_t len = stbsp_snprintf(buffer, buf_len, "%08x:", addr);
+    p += len;
+    buf_len -= len;
+
+    for (; addr < next_line; addr += 2) {
+      len = stbsp_snprintf(p, buf_len, " %02x", data[addr]);
+      p += len;
+      buf_len -= len;
+      if (addr + 1 < next_line) {
+        len = stbsp_snprintf(p, buf_len, "%02x", data[addr + 1]);
+        p += len;
+        buf_len -= len;
+      }
+    }
+
+    memfs_log(buffer, p - buffer);
+  }
+#endif
 }
 
 static Node* GetNode(__wasi_inode_t node) {
@@ -174,6 +212,23 @@ static NewNodeResult NewNode(Node *parent, const char *name, size_t name_len,
   result.node->stat = stat;
   result.node->stat.st_ino = result.inode;
   return result;
+}
+
+static void DeleteNode(Node* node) {
+  tracef("!!  DeleteNode(node:%p)", node);
+  ASSERT(node->stat.st_nlink == 0);
+  __wasi_inode_t inode = GetInode(node);
+  node->next_free = g_next_inode;
+  g_next_inode = inode;
+}
+
+static void UnlinkNode(Node* node) {
+  tracef("!!  UnlinkNode(node:%p) st_nlink=%u->%u", node, node->stat.st_nlink,
+         node->stat.st_nlink - 1);
+  ASSERT(node->stat.st_nlink > 0);
+  if (--node->stat.st_nlink == 0 && node->fdesc_count == 0) {
+    DeleteNode(node);
+  }
 }
 
 static void AddDirent(Node *dirnode, const char *name, size_t name_len,
@@ -337,7 +392,16 @@ static NewFDResult NewFD(Node* node, __wasi_fdstat_t stat, bool is_prestat) {
   result.fdesc->stat = stat;
   result.fdesc->stat.fs_filetype = node->stat.st_filetype;
   result.fdesc->is_prestat = is_prestat;
+  node->fdesc_count++;
   return result;
+}
+
+static void ReleaseFD(FDesc* fdesc) {
+  Node* node = GetNode(fdesc->inode);
+  ASSERT(node->fdesc_count > 0);
+  if (--node->fdesc_count == 0 && node->stat.st_nlink == 0) {
+    DeleteNode(node);
+  }
 }
 
 static __wasi_filestat_t GetCharDeviceStat(__wasi_device_t dev) {
@@ -443,41 +507,8 @@ WASM_EXPORT __wasi_errno_t fd_close(__wasi_fd_t fd) {
     return TRACE_ERRNO(__WASI_EBADF);
   }
   fdesc->stat.fs_filetype = __WASI_FILETYPE_UNKNOWN;
-#if DEBUG
-  Node* node = GetNode(fdesc->inode);
-  __wasi_filesize_t addr = 0;
-  __wasi_filesize_t next_line = 16;
-  __wasi_filesize_t size = node->file.size;
-
-  char buffer[100];
-
-  uint8_t *data = node->file.data;
-  for (; addr < size; addr = next_line) {
-    next_line = addr + 16;
-    if (next_line > size) {
-      next_line = size;
-    }
-
-    char* p = buffer;
-    size_t buf_len = sizeof(buffer);
-    size_t len = stbsp_snprintf(buffer, buf_len, "%08x:", addr);
-    p += len;
-    buf_len -= len;
-
-    for (; addr < next_line; addr += 2) {
-      len = stbsp_snprintf(p, buf_len, " %02x", data[addr]);
-      p += len;
-      buf_len -= len;
-      if (addr + 1 < next_line) {
-        len = stbsp_snprintf(p, buf_len, "%02x", data[addr + 1]);
-        p += len;
-        buf_len -= len;
-      }
-    }
-
-    memfs_log(buffer, p - buffer);
-  }
-#endif
+  ReleaseFD(fdesc);
+  DebugPrintNodeContents(GetNode(fdesc->inode));
   return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
@@ -900,7 +931,16 @@ WASM_EXPORT __wasi_errno_t path_unlink_file(__wasi_fd_t fd, const char *path,
   copy_in(g_path_buf, path, path_len);
   tracef("!!path_unlink_file(fd:%u, path:\"%.*s\")", fd, (int)path_len,
          g_path_buf);
-  return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+  FDesc* fdesc = GetFDesc(fd);
+  if (fdesc == NULL) {
+    return TRACE_ERRNO(__WASI_EBADF);
+  }
+  LookupResult lookup = LookupPath(GetNode(fdesc->inode), g_path_buf, path_len);
+  if (!lookup.node) {
+    return TRACE_ERRNO(__WASI_ENOENT);
+  }
+  UnlinkNode(lookup.node);
+  return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
 
