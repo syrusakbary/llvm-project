@@ -169,6 +169,15 @@ class MemFS {
     this.mem.writeStrBuf(addr, contents);
   }
 
+  getFileContents(path) {
+    this.mem.check();
+    this.mem.writeStrBuf(this.exports.GetPathBuf(), path);
+    const inode = this.exports.FindNode(path.length);
+    const addr = this.exports.GetFileNodeAddress(inode);
+    const size = this.exports.GetFileNodeSize(inode);
+    return new Uint8Array(this.mem.buffer, addr, size);
+  }
+
   hostFlush() {
     this.hostWriteBuffer.flush();
   }
@@ -319,16 +328,55 @@ class App {
   }
 }
 
+function isPrint(b) {
+  return b >= 32 && b < 128;
+}
+
+function dump(buf) {
+  let str = '';
+  let addr = 0;
+  let line = buf.slice(addr, addr + 16);
+  while (line.length > 0) {
+    let lineStr = `${addr.toString(16).padStart(8, '0')}:`;
+
+    for (let i = 0; i < line.length; i += 2) {
+      lineStr += ` ${line[i].toString(16).padStart(2, '0')}`;
+      if (i + 1 < line.length) {
+        lineStr += `${line[i + 1].toString(16).padStart(2, '0')}`;
+      }
+    }
+    lineStr = lineStr.padEnd(51, ' ');
+    for (let i = 0; i < line.length; ++i) {
+      let b = line[i];
+      let c = isPrint(b) ? String.fromCharCode(b) : '.';
+      lineStr += `${c}`;
+    }
+    lineStr += '\n';
+
+    addr += 16;
+    line = buf.slice(addr, addr + 16);
+    str += lineStr;
+  }
+  print(str);
+}
+
 profile('total time', () => {
+  const input = 'foo/test.c';
+  const obj = 'test.o';
+  const wasm = 'test';
+
   const memfs = new MemFS();
   memfs.addDirectory('foo');
-  memfs.addFile('foo/test.c', 'int add(int x, int y) { return x + y; }\n')
+  memfs.addFile(input, 'int add(int x, int y) { return x + y; }\n')
 
   // new App('clang', memfs, 'clang', '--help');
-  new App('clang', memfs, 'clang', '-cc1', '-emit-obj', 'foo/test.c', '-o', 'test.o');
   // new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
 
-  new App('lld', memfs, 'wasm-ld', '--verbose', '--no-threads', '--no-entry', 'test.o', '-o', 'test')
+  new App('clang', memfs, 'clang', '-cc1', '-emit-obj', input, '-o', obj);
+  new App('lld', memfs, 'wasm-ld', '--no-threads', '--no-entry', obj, '-o', wasm)
+
+  const contents = memfs.getFileContents(wasm);
+  dump(contents);
 
   memfs.hostFlush();
 });
