@@ -8,7 +8,7 @@
 
 #include "stb_sprintf.h"
 
-#define TRACE 0
+#define TRACE 1
 #define DEBUG 0
 
 #define WASM_EXPORT __attribute__((__visibility__("default")))
@@ -215,6 +215,8 @@ static __wasi_dirent_t *FindDirentByInode(Node *dirnode, __wasi_inode_t inode) {
 
 static __wasi_dirent_t *FindDirentByName(Node *dirnode, const char *name,
                                          size_t name_len) {
+  debugf("!!FindDirentByName(node:%p, \"%.*s\")", dirnode, (int)name_len,
+         name);
   __wasi_dirent_t *dirent = dirnode->dir.dirents;
   while (dirent) {
     const char *dirent_name = GetDirentName(dirent);
@@ -227,7 +229,8 @@ static __wasi_dirent_t *FindDirentByName(Node *dirnode, const char *name,
     } else {
       // No match.
       __wasi_dirent_t *new_dirent = GetNextDirent(dirnode, dirent);
-      debugf("!!  no, dirent:%p=>%p", dirent, new_dirent);
+      debugf("!!  no (name_len:%zu, len:%zu), dirent:%p=>%p", name_len, len,
+             dirent, new_dirent);
       dirent = new_dirent;
     }
   }
@@ -235,11 +238,17 @@ static __wasi_dirent_t *FindDirentByName(Node *dirnode, const char *name,
 }
 
 static __wasi_errno_t RemoveDirent(Node* dirnode, __wasi_dirent_t* dirent) {
+  debugf("!!RemoveDirent(node:%p, dirent:%p)", dirnode, dirent);
   const void* next_dirent = GetNextDirent(dirnode, dirent);
   size_t dirent_offset = (char*)dirent - (char*)dirnode->dir.dirents;
   size_t dirent_size = dirent->d_next - dirent_offset;
   size_t move_size = dirnode->dir.size - dirent->d_next;
   memmove(dirent, next_dirent, move_size);
+
+  // Fix the dirents size early, so GetNextDirent works properly.
+  size_t new_size = dirnode->dir.size - dirent_size;
+  dirnode->dir.size = new_size;
+
   // We now need to fix up the d_next fields, since they still include the
   // space required for the removed dirent.
   while (dirent) {
@@ -247,9 +256,7 @@ static __wasi_errno_t RemoveDirent(Node* dirnode, __wasi_dirent_t* dirent) {
     dirent = GetNextDirent(dirnode, dirent);
   }
 
-  size_t new_size = dirnode->dir.size - dirent_size;
   dirnode->dir.dirents = realloc(dirnode->dir.dirents, new_size);
-  dirnode->dir.size = new_size;
 
   // TODO remove unused node
   return __WASI_ESUCCESS;
@@ -893,7 +900,8 @@ WASM_EXPORT __wasi_errno_t path_symlink(const char *old_path,
 WASM_EXPORT __wasi_errno_t path_unlink_file(__wasi_fd_t fd, const char *path,
                                             size_t path_len) {
   copy_in(g_path_buf, path, path_len);
-  tracef("!!path_symlink(fd:%u, path:\"%.*s\")", fd, (int)path_len, g_path_buf);
+  tracef("!!path_unlink_file(fd:%u, path:\"%.*s\")", fd, (int)path_len,
+         g_path_buf);
   return TRACE_ERRNO(__WASI_ENOTCAPABLE);
 }
 

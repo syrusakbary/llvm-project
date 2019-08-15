@@ -95,19 +95,21 @@ class Memory {
 
   // Null-terminated string.
   writeStr(o, str) {
-    o += this.writeStrBuf(o, str);
-    this.write8(o++, 0);
+    o += this.write(o, str);
+    this.write8(o, 0);
     return str.length + 1;
   }
 
-  // String contents w/o null-terminator.
-  writeStrBuf(o, str) {
-    for (let i = 0; i < str.length; i++) {
-      const c = str.charCodeAt(i);
-      assert(c < 256);
-      this.write8(o++, c);
+  write(o, buf) {
+    if (buf instanceof ArrayBuffer) {
+      return this.write(o, new Uint8Array(buf));
+    } else if (typeof buf === 'string') {
+      return this.write(o, buf.split('').map(x => x.charCodeAt(0)));
+    } else {
+      const dst = new Uint8Array(this.buffer, o, buf.length);
+      dst.set(buf);
+      return buf.length;
     }
-    return str.length;
   }
 };
 
@@ -157,21 +159,23 @@ class MemFS {
 
   addDirectory(path) {
     this.mem.check();
-    this.mem.writeStrBuf(this.exports.GetPathBuf(), path);
+    this.mem.write(this.exports.GetPathBuf(), path);
     this.exports.AddDirectoryNode(path.length);
   }
 
   addFile(path, contents) {
+    const length =
+        contents instanceof ArrayBuffer ? contents.byteLength : contents.length;
     this.mem.check();
-    this.mem.writeStrBuf(this.exports.GetPathBuf(), path);
-    const inode = this.exports.AddFileNode(path.length, contents.length);
+    this.mem.write(this.exports.GetPathBuf(), path);
+    const inode = this.exports.AddFileNode(path.length, length);
     const addr = this.exports.GetFileNodeAddress(inode);
-    this.mem.writeStrBuf(addr, contents);
+    this.mem.write(addr, contents);
   }
 
   getFileContents(path) {
     this.mem.check();
-    this.mem.writeStrBuf(this.exports.GetPathBuf(), path);
+    this.mem.write(this.exports.GetPathBuf(), path);
     const inode = this.exports.FindNode(path.length);
     const addr = this.exports.GetFileNodeAddress(inode);
     const size = this.exports.GetFileNodeSize(inode);
@@ -367,16 +371,19 @@ profile('total time', () => {
 
   const memfs = new MemFS();
   memfs.addDirectory('foo');
-  memfs.addFile(input, 'int add(int x, int y) { return x + y; }\n')
+  memfs.addFile(input, 'int main() { return 42; }\n')
+  memfs.addFile('crt1.o', readbuffer('crt1.o'));
+  memfs.addFile('libc.a', readbuffer('libc.a'));
+  memfs.addFile('libc.imports', readbuffer('libc.imports'));
 
   // new App('clang', memfs, 'clang', '--help');
   // new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
 
-  new App('clang', memfs, 'clang', '-cc1', '-emit-obj', input, '-o', obj);
-  new App('lld', memfs, 'wasm-ld', '--no-threads', '--no-entry', obj, '-o', wasm)
+  new App('clang', memfs, 'clang', '-cc1', '-O2', '-emit-obj', input, '-o', obj);
+  new App('lld', memfs, 'wasm-ld', '--no-threads', '-L.', 'crt1.o', obj, '-lc',
+          '-o', wasm)
 
-  const contents = memfs.getFileContents(wasm);
-  dump(contents);
+  dump(memfs.getFileContents(wasm));
 
   memfs.hostFlush();
 });
