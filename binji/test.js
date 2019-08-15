@@ -381,15 +381,13 @@ profile('total time', () => {
   memfs.addFile('libc.a', readbuffer('libc.a'));
   memfs.addFile('libc.imports', readbuffer('libc.imports'));
 
-  // new App('clang', memfs, 'clang', '--help');
-  // new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
-
   const clang = getModuleFromFile('clang');
-  new App(clang, memfs, 'clang', '-cc1', '-O2', '-emit-obj', input, '-o', obj);
-
   const lld = getModuleFromFile('lld');
-//  new App('lld', memfs, 'wasm-ld', '--no-entry', '--no-threads', obj, '-o', wasm)
-  new App(lld, memfs, 'wasm-ld', '--no-threads', '-L.', 'crt1.o', obj, '-lc', '-o', wasm)
+
+  profile('compile+link', () => {
+    new App(clang, memfs, 'clang', '-cc1', '-O2', '-emit-obj', input, '-o', obj);
+    new App(lld, memfs, 'wasm-ld', '--no-threads', '-L.', 'crt1.o', obj, '-lc', '-o', wasm)
+  });
 
   const test = getModuleFromBuffer(memfs.getFileContents(wasm));
   new App(test, memfs, 'test');
