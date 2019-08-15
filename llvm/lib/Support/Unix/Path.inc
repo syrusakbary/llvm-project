@@ -111,8 +111,9 @@ namespace fs {
 
 #ifdef BINJI_HACK
 char* realpath(const char* path, char* resolved_path) {
-  fprintf(stderr, "realpath(\"%s\", \"%s\")\n", path,
-          resolved_path ? resolved_path : "(null)");
+#if 0 && BINJI_HACK
+  fprintf(stderr, "realpath(\"%s\", \"%s\")\n", path, resolved_path ? resolved_path : "(null)");
+#endif
   // TODO(BINJI_HACK): implement
   if (resolved_path == nullptr) {
     resolved_path = strdup(path);
@@ -345,7 +346,9 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
 #endif
 
   StringRef ResultStr(result.begin(), result.size());
+#if 0 && BINJI_HACK
   fprintf(stderr, "current_path(), result=%s\n", ResultStr.str().c_str());
+#endif
 
   result.set_size(strlen(result.data()));
   return std::error_code();
@@ -355,7 +358,9 @@ std::error_code set_current_path(const Twine &path) {
   SmallString<128> path_storage;
   StringRef p = path.toNullTerminatedStringRef(path_storage);
 
+#if 0 && BINJI_HACK
   fprintf(stderr, "set_current_path(%s)\n", p.begin());
+#endif
 
 #ifndef BINJI_HACK
   if (::chdir(p.begin()) == -1)
@@ -1044,7 +1049,9 @@ std::error_code openFileForRead(const Twine &Name, int &ResultFD,
 #ifndef BINJI_HACK
     if (::realpath(P.begin(), Buffer) != nullptr)
 #else
+#if 0 && BINJI_HACK
     fprintf(stderr, "openFileForRead(%s)\n", P.begin());
+#endif
     if (realpath(P.begin(), Buffer) != nullptr)
 #endif
       RealPath->append(Buffer, Buffer + strlen(Buffer));
