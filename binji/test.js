@@ -38,17 +38,21 @@ function profile(name, f) {
   }
 }
 
-function getModule(filename) {
-  const buffer = profile(`readbuffer(${filename})`, () => readbuffer(filename));
-  const module = profile(`new Module`, () => new WebAssembly.Module(buffer));
-  return module;
+function readFile(filename) {
+  return profile(`readFile(${filename})`, () => readbuffer(filename));
 }
 
-function getInstance(filename, imports) {
-  const mod = getModule(filename);
-  const instance =
-      profile(`new Instance`, () => new WebAssembly.Instance(mod, imports));
-  return instance;
+function getModuleFromBuffer(buffer) {
+  return profile(`new Module`, () => new WebAssembly.Module(buffer));
+}
+
+function getModuleFromFile(filename) {
+  return getModuleFromBuffer(readFile(filename));
+}
+
+function getInstance(module, imports) {
+  return profile(`new Instance`,
+                 () => new WebAssembly.Instance(module, imports));
 }
 
 function getImportObject(obj, names) {
@@ -146,7 +150,7 @@ class MemFS {
     const env = getImportObject(
         this, [ 'abort', 'host_write', 'memfs_log', 'copy_in', 'copy_out' ]);
 
-    this.instance = getInstance('memfs', {env});
+    this.instance = getInstance(getModuleFromFile('memfs'), {env});
     this.exports = this.instance.exports;
     this.mem = new Memory(this.exports.memory);
 
@@ -170,6 +174,7 @@ class MemFS {
     this.mem.write(this.exports.GetPathBuf(), path);
     const inode = this.exports.AddFileNode(path.length, length);
     const addr = this.exports.GetFileNodeAddress(inode);
+    this.mem.check();
     this.mem.write(addr, contents);
   }
 
@@ -234,7 +239,7 @@ class MemFS {
 
 
 class App {
-  constructor(filename, memfs, name, ...args) {
+  constructor(module, memfs, name, ...args) {
     this.argv = [name, ...args];
     this.environ = {USER : 'alice'};
     this.memfs = memfs;
@@ -247,13 +252,13 @@ class App {
     // Fill in some WASI implementations from memfs.
     Object.assign(wasi_unstable, this.memfs.exports);
 
-    this.instance = getInstance(filename, {wasi_unstable});
+    this.instance = getInstance(module, {wasi_unstable});
     this.exports = this.instance.exports;
     this.mem = new Memory(this.exports.memory);
     this.memfs.hostMem = this.mem;
 
     try {
-      profile(`run ${name}`, () => this.exports._start());
+      profile(`running ${name}`, () => this.exports._start());
     } catch(exn) {
       if (exn instanceof ProcExit) {
         if (exn.code != 0) {
@@ -379,13 +384,15 @@ profile('total time', () => {
   // new App('clang', memfs, 'clang', '--help');
   // new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
 
-  new App('clang', memfs, 'clang', '-cc1', '-O2', '-emit-obj', input, '-o', obj);
+  const clang = getModuleFromFile('clang');
+  new App(clang, memfs, 'clang', '-cc1', '-O2', '-emit-obj', input, '-o', obj);
 
+  const lld = getModuleFromFile('lld');
 //  new App('lld', memfs, 'wasm-ld', '--no-entry', '--no-threads', obj, '-o', wasm)
-  new App('lld', memfs, 'wasm-ld', '--verbose', '--no-threads', '-L.', 'crt1.o', obj, '-lc', '-o', wasm)
+  new App(lld, memfs, 'wasm-ld', '--no-threads', '-L.', 'crt1.o', obj, '-lc', '-o', wasm)
 
-
-  dump(memfs.getFileContents(wasm));
+  const test = getModuleFromBuffer(memfs.getFileContents(wasm));
+  new App(test, memfs, 'test');
 
   memfs.hostFlush();
 });
