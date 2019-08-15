@@ -380,8 +380,10 @@ profile('total time', () => {
   // new App('clang', memfs, 'clang', '-cc1', '-S', 'test.c', '-o', '-');
 
   new App('clang', memfs, 'clang', '-cc1', '-O2', '-emit-obj', input, '-o', obj);
-  new App('lld', memfs, 'wasm-ld', '--no-threads', '-L.', 'crt1.o', obj, '-lc',
-          '-o', wasm)
+
+//  new App('lld', memfs, 'wasm-ld', '--no-entry', '--no-threads', obj, '-o', wasm)
+  new App('lld', memfs, 'wasm-ld', '--verbose', '--no-threads', '-L.', 'crt1.o', obj, '-lc', '-o', wasm)
+
 
   dump(memfs.getFileContents(wasm));
 
