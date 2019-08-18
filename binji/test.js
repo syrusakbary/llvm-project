@@ -432,50 +432,10 @@ function dump(buf) {
 profile('total time', () => {
   const input = 'test.cc';
   const contents = `
-  // #include <algorithm>  // FAIL
-  // #include <any> // ok
-  #include <array> // FAIL
-  // #include <bitset> // FAIL
-  // #include <chrono> // ok
-  // #include <complex> // FAIL
-  // #include <filesystem> // ok
-  // #include <fstream> // ok
-  // #include <functional> // FAIL
-  // #include <initializer_list> // ok
-  // #include <iomanip> // FAIL
-  // #include <iosfwd> // ok
-  // #include <ios> // ok
-  // #include <iostream> // FAIL
-  // #include <istream> // FAIL
-  // #include <iterator> // ok
-  // #include <limits> // ok
-  // #include <list> // FAIL
-  // #include <locale> // FAIL
-  // #include <map> // FAIL
-  // #include <memory> // ok
-  // #include <new> // ok
-  // #include <numeric> // FAIL
-  // #include <optional> // FAIL
-  // #include <ostream> // FAIL
-  // #include <random> // FAIL
-  // #include <regex> // ok
-  // #include <set> // FAIL
-  // #include <span> // FAIL
-  // #include <sstream> // FAIL
-  // #include <stack> // FAIL
-  // #include <streambuf> // ok
-  // #include <string> // FAIL
-  // #include <string_view> // FAIL
-  // #include <tuple> // ok
-  // #include <typeindex> // ok
-  // #include <typeinfo> // ok
-  // #include <type_traits> // ok
-  // #include <unordered_map> // FAIL
-  // #include <unordered_set> // FAIL
-  // #include <valarray> // FAIL
-  // #include <variant> // FAIL
-  // #include <vector> // FAIL
-  // #include <version> // ok
+  #include <iostream>
+  int main() {
+    std::cout << "Hello, world!\\n";
+  }
   `;
 
   const memfs = new MemFS();
@@ -497,9 +457,9 @@ profile('total time', () => {
   });
 
   const clang = getModuleFromFile('clang');
-  // const lld = getModuleFromFile('lld');
+  const lld = getModuleFromFile('lld');
 
-  const wasm = 'test';
+  const wasm = 'test.wasm';
 
   profile('compile+link', () => {
     const libdir = 'lib/wasm32-wasi';
@@ -507,36 +467,22 @@ profile('total time', () => {
     const obj = 'test.o';
 
     new App(clang, memfs, 'clang', '-cc1',
-            // '-triple', 'wasm32-unknown-wasi',
-            '-emit-obj',
-            // '-E',
-            // '-S',
-            // '-main-file-name', input, '-mrelocation-model', 'static',
-            // '-mthread-model', 'single', '-mconstructor-aliases',
-            // '-fuse-init-array', '-target-cpu', 'generic', '-fvisibility',
-            // 'hidden', '-momit-leaf-frame-pointer', '-resource-dir',
-            // '/lib/clang/8.0.1',
+            '-emit-obj', '-disable-free',
             '-isysroot', '/',
             '-internal-isystem', '/include/c++/v1',
             '-internal-isystem', '/include',
             '-internal-isystem', '/lib/clang/8.0.1/include',
-
-            // '-fdebug-compilation-dir', '/',
-            // '-O2',
-            // '-ferror-limit', '19', '-fmessage-length', '212', '-fno-common',
+            '-O2',
+            '-ferror-limit', '19', '-fmessage-length', '80',
             '-o', obj, '-x', 'c++', input
     );
 
-    if (false) {
-      new App(lld, memfs, 'wasm-ld', '--no-threads', `-L${libdir}`, crt1, obj,
-              '-lc', '-o', wasm)
-    }
+    new App(lld, memfs, 'wasm-ld', '--no-threads', `-L${libdir}`, crt1, obj,
+            '-lc', '-lc++', '-lc++abi', '-o', wasm)
   });
 
-  if (false) {
-    const test = getModuleFromBuffer(memfs.getFileContents(wasm));
-    new App(test, memfs, 'test');
-  }
+  const test = getModuleFromBuffer(memfs.getFileContents(wasm));
+  new App(test, memfs, 'test');
 
   memfs.hostFlush();
 });
