@@ -26,24 +26,12 @@ function assert(cond) {
   }
 }
 
-function profile(name, f) {
-  const start = performance.now();
-  try {
-    return f();
-  } catch (exn) {
-    throw exn;
-  } finally {
-    const time = performance.now() - start;
-    print(`|| ${name} took ${time.toFixed(2)}ms`);
-  }
-}
-
 function readFile(filename) {
-  return profile(`readFile(${filename})`, () => readbuffer(filename));
+  return readbuffer(filename);
 }
 
 function getModuleFromBuffer(buffer) {
-  return profile(`new Module`, () => new WebAssembly.Module(buffer));
+  return WebAssembly.compile(buffer);
 }
 
 function getModuleFromFile(filename) {
@@ -51,8 +39,7 @@ function getModuleFromFile(filename) {
 }
 
 function getInstance(module, imports) {
-  return profile(`new Instance`,
-                 () => new WebAssembly.Instance(module, imports));
+  return WebAssembly.instantiate(module, imports);
 }
 
 function getImportObject(obj, names) {
@@ -133,14 +120,14 @@ class HostWriteBuffer {
       if (newline === -1) {
         break;
       }
-      print(this.buffer.slice(0, newline));
+      console.log(this.buffer.slice(0, newline));
       this.buffer = this.buffer.slice(newline + 1);
     }
   }
 
   flush() {
     if (this.buffer.length > 0) {
-      print(this.buffer);
+      console.log(this.buffer);
     }
   }
 }
@@ -154,11 +141,14 @@ class MemFS {
     const env = getImportObject(
         this, [ 'abort', 'host_write', 'memfs_log', 'copy_in', 'copy_out' ]);
 
-    this.instance = getInstance(getModuleFromFile('memfs'), {env});
-    this.exports = this.instance.exports;
-    this.mem = new Memory(this.exports.memory);
-
-    profile('init memfs', () => this.exports.init());
+    this.ready = getModuleFromFile('memfs')
+                     .then(module => getInstance(module, {env}))
+                     .then(instance => {
+                       this.instance = instance;
+                       this.exports = instance.exports;
+                       this.mem = new Memory(this.exports.memory);
+                       this.exports.init();
+                     })
   }
 
   set hostMem(mem) {
@@ -217,7 +207,7 @@ class MemFS {
 
   memfs_log(buf, len) {
     this.mem.check();
-    print(this.mem.readStr(buf, len));
+    console.log(this.mem.readStr(buf, len));
   }
 
   copy_out(clang_dst, memfs_src, size) {
@@ -225,7 +215,7 @@ class MemFS {
     const dst = new Uint8Array(this.hostMem_.buffer, clang_dst, size);
     this.mem.check();
     const src = new Uint8Array(this.mem.buffer, memfs_src, size);
-    // print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)}, ${size})`);
+    // console.log(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)}, ${size})`);
     dst.set(src);
   }
 
@@ -234,7 +224,7 @@ class MemFS {
     const dst = new Uint8Array(this.mem.buffer, memfs_dst, size);
     this.hostMem_.check();
     const src = new Uint8Array(this.hostMem_.buffer, clang_src, size);
-    // print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)}, ${size})`);
+    // console.log(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)}, ${size})`);
     dst.set(src);
   }
 }
@@ -246,6 +236,8 @@ class App {
     this.environ = {USER : 'alice'};
     this.memfs = memfs;
 
+    console.log(`>>> running \"${this.argv.join(' ')}\"`);
+
     const wasi_unstable = getImportObject(this, [
       'proc_exit', 'environ_sizes_get', 'environ_get', 'args_sizes_get',
       'args_get', 'random_get', 'clock_time_get', 'poll_oneoff'
@@ -254,14 +246,20 @@ class App {
     // Fill in some WASI implementations from memfs.
     Object.assign(wasi_unstable, this.memfs.exports);
 
-    this.instance = getInstance(module, {wasi_unstable});
-    this.exports = this.instance.exports;
-    this.mem = new Memory(this.exports.memory);
-    this.memfs.hostMem = this.mem;
+    this.ready =
+        module.then(mod => getInstance(mod, {wasi_unstable})).then(instance => {
+          this.instance = instance;
+          this.exports = this.instance.exports;
+          this.mem = new Memory(this.exports.memory);
+          this.memfs.hostMem = this.mem;
+        });
+  }
 
+  async run() {
+    await this.ready;
     try {
-      profile(`running ${name}`, () => this.exports._start());
-    } catch(exn) {
+      this.exports._start();
+    } catch (exn) {
       if (!(exn instanceof ProcExit) || exn.code != 0) {
         throw exn;
       }
@@ -390,18 +388,15 @@ class Tar {
       this.offset += entry.size;
       this.alignUp();
     } else if (entry.type !== '5') { // Directory.
-      print('type', entry.type);
+      console.log('type', entry.type);
       assert(false);
     }
     return entry;
   }
 }
 
-function isPrint(b) {
-  return b >= 32 && b < 128;
-}
-
 function dump(buf) {
+  const isPrint = b => b >= 32 && b < 128;
   let str = '';
   let addr = 0;
   let line = buf.slice(addr, addr + 16);
@@ -426,22 +421,30 @@ function dump(buf) {
     line = buf.slice(addr, addr + 16);
     str += lineStr;
   }
-  print(str);
+  console.log(str);
 }
 
-profile('total time', () => {
-  const input = 'test.cc';
-  const contents = `
-  #include <iostream>
-  int main() {
-    std::cout << "Hello, world!\\n";
-  }
-  `;
+async function main() {
+  testRunner.waitUntilDone();
+  try {
+    const input = 'test.cc';
+    const contents = `
+    #include <stdio.h>
 
-  const memfs = new MemFS();
-  memfs.addFile(input, contents)
+    int fib(int n) {
+      if (n < 2) return n;
+      return fib(n-1) + fib(n-2);
+    }
 
-  profile('untar', () => {
+    int main() {
+      printf("fib(10) = %d\\n", fib(10));
+    }
+    `;
+
+    const memfs = new MemFS();
+    await memfs.ready;
+    memfs.addFile(input, contents)
+
     const tar = new Tar('sysroot.tar');
     let entry;
     while (entry = tar.readEntry()) {
@@ -454,35 +457,39 @@ profile('total time', () => {
         break;
       }
     }
-  });
 
-  const clang = getModuleFromFile('clang');
-  const lld = getModuleFromFile('lld');
 
-  const wasm = 'test.wasm';
+    const wasm = 'test.wasm';
 
-  profile('compile+link', () => {
     const libdir = 'lib/wasm32-wasi';
     const crt1 = `${libdir}/crt1.o`;
     const obj = 'test.o';
 
-    new App(clang, memfs, 'clang', '-cc1',
-            '-emit-obj', '-disable-free',
-            '-isysroot', '/',
-            '-internal-isystem', '/include/c++/v1',
-            '-internal-isystem', '/include',
-            '-internal-isystem', '/lib/clang/8.0.1/include',
-            '-O2',
-            '-ferror-limit', '19', '-fmessage-length', '80',
-            '-o', obj, '-x', 'c++', input
-    );
+    let app;
 
-    new App(lld, memfs, 'wasm-ld', '--no-threads', `-L${libdir}`, crt1, obj,
-            '-lc', '-lc++', '-lc++abi', '-o', wasm)
-  });
+    const clang = getModuleFromFile('clang');
+    app = new App(clang, memfs, 'clang', '-cc1', '-emit-obj', '-disable-free',
+                  '-isysroot', '/', '-internal-isystem', '/include/c++/v1',
+                  '-internal-isystem', '/include', '-internal-isystem',
+                  '/lib/clang/8.0.1/include', '-O2', '-ferror-limit', '19',
+                  '-fmessage-length', '80', '-o', obj, '-x', 'c++', input);
+    await app.run();
 
-  const test = getModuleFromBuffer(memfs.getFileContents(wasm));
-  new App(test, memfs, 'test');
+    const lld = getModuleFromFile('lld');
+    app = new App(lld, memfs, 'wasm-ld', '--no-threads', `-L${libdir}`, crt1,
+                  obj, '-lc', '-lc++', '-lc++abi', '-o', wasm)
+    await app.run();
 
-  memfs.hostFlush();
-});
+    const test = getModuleFromBuffer(memfs.getFileContents(wasm));
+    app = new App(test, memfs, 'test');
+    await app.run();
+
+    memfs.hostFlush();
+  } catch (e) {
+    print(e.stack);
+  } finally {
+    testRunner.notifyDone();
+  }
+}
+
+main();
