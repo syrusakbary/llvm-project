@@ -14,4 +14,4 @@ stb_sprintf.o: stb_sprintf.h
 
 .PHONY: test
 test:
-	${d8} test.js
+	${d8} test.js --stack-trace-limit=200

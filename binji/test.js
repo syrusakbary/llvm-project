@@ -225,8 +225,7 @@ class MemFS {
     const dst = new Uint8Array(this.hostMem_.buffer, clang_dst, size);
     this.mem.check();
     const src = new Uint8Array(this.mem.buffer, memfs_src, size);
-    // print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)},
-    // ${size})`);
+    // print(`copy_out(${clang_dst.toString(16)}, ${memfs_src.toString(16)}, ${size})`);
     dst.set(src);
   }
 
@@ -235,8 +234,7 @@ class MemFS {
     const dst = new Uint8Array(this.mem.buffer, memfs_dst, size);
     this.hostMem_.check();
     const src = new Uint8Array(this.hostMem_.buffer, clang_src, size);
-    // print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)},
-    // ${size})`);
+    // print(`copy_in(${memfs_dst.toString(16)}, ${clang_src.toString(16)}, ${size})`);
     dst.set(src);
   }
 }
@@ -264,10 +262,8 @@ class App {
     try {
       profile(`running ${name}`, () => this.exports._start());
     } catch(exn) {
-      if (exn instanceof ProcExit) {
-        if (exn.code != 0) {
-          throw exn;
-        }
+      if (!(exn instanceof ProcExit) || exn.code != 0) {
+        throw exn;
       }
     }
   }
@@ -433,19 +429,56 @@ function dump(buf) {
   print(str);
 }
 
-const contents = `
-#include <stdio.h>
-
-int main() {
-  printf("Hello, World!\\n");
-}
-`;
-
 profile('total time', () => {
-  const input = 'foo/test.c';
+  const input = 'test.cc';
+  const contents = `
+  // #include <algorithm>  // FAIL
+  // #include <any> // ok
+  #include <array> // FAIL
+  // #include <bitset> // FAIL
+  // #include <chrono> // ok
+  // #include <complex> // FAIL
+  // #include <filesystem> // ok
+  // #include <fstream> // ok
+  // #include <functional> // FAIL
+  // #include <initializer_list> // ok
+  // #include <iomanip> // FAIL
+  // #include <iosfwd> // ok
+  // #include <ios> // ok
+  // #include <iostream> // FAIL
+  // #include <istream> // FAIL
+  // #include <iterator> // ok
+  // #include <limits> // ok
+  // #include <list> // FAIL
+  // #include <locale> // FAIL
+  // #include <map> // FAIL
+  // #include <memory> // ok
+  // #include <new> // ok
+  // #include <numeric> // FAIL
+  // #include <optional> // FAIL
+  // #include <ostream> // FAIL
+  // #include <random> // FAIL
+  // #include <regex> // ok
+  // #include <set> // FAIL
+  // #include <span> // FAIL
+  // #include <sstream> // FAIL
+  // #include <stack> // FAIL
+  // #include <streambuf> // ok
+  // #include <string> // FAIL
+  // #include <string_view> // FAIL
+  // #include <tuple> // ok
+  // #include <typeindex> // ok
+  // #include <typeinfo> // ok
+  // #include <type_traits> // ok
+  // #include <unordered_map> // FAIL
+  // #include <unordered_set> // FAIL
+  // #include <valarray> // FAIL
+  // #include <variant> // FAIL
+  // #include <vector> // FAIL
+  // #include <version> // ok
+  `;
 
   const memfs = new MemFS();
-  memfs.addDirectory('foo');
   memfs.addFile(input, contents)
 
   profile('untar', () => {
@@ -464,7 +497,7 @@ profile('total time', () => {
   });
 
   const clang = getModuleFromFile('clang');
-  const lld = getModuleFromFile('lld');
+  // const lld = getModuleFromFile('lld');
 
   const wasm = 'test';
 
@@ -476,24 +509,34 @@ profile('total time', () => {
     new App(clang, memfs, 'clang', '-cc1',
             // '-triple', 'wasm32-unknown-wasi',
             '-emit-obj',
+            // '-E',
+            // '-S',
             // '-main-file-name', input, '-mrelocation-model', 'static',
             // '-mthread-model', 'single', '-mconstructor-aliases',
             // '-fuse-init-array', '-target-cpu', 'generic', '-fvisibility',
             // 'hidden', '-momit-leaf-frame-pointer', '-resource-dir',
             // '/lib/clang/9.0.0',
-            '-isysroot', '/', '-internal-isystem', '/include',
+            '-isysroot', '/',
+            '-internal-isystem', '/include/c++/v1',
+            '-internal-isystem', '/include',
             '-internal-isystem', '/lib/clang/9.0.0/include',
 
             // '-fdebug-compilation-dir', '/',
-            '-O2',
+            // '-O2',
             // '-ferror-limit', '19', '-fmessage-length', '212', '-fno-common',
-            '-o', obj, '-x', 'c', input);
-    new App(lld, memfs, 'wasm-ld', '--no-threads', `-L${libdir}`, crt1, obj,
-            '-lc', '-o', wasm)
+            '-o', obj, '-x', 'c++', input
+    );
+
+    if (false) {
+      new App(lld, memfs, 'wasm-ld', '--no-threads', `-L${libdir}`, crt1, obj,
+              '-lc', '-o', wasm)
+    }
   });
 
-  const test = getModuleFromBuffer(memfs.getFileContents(wasm));
-  new App(test, memfs, 'test');
+  if (false) {
+    const test = getModuleFromBuffer(memfs.getFileContents(wasm));
+    new App(test, memfs, 'test');
+  }
 
   memfs.hostFlush();
 });
