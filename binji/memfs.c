@@ -742,7 +742,8 @@ static LookupResult LookupPath(Node *dirnode, const char *path,
     // set the parent in case the caller wants to create a new file. If this
     // wasn't the last component, don't set the parent, since the path wasn't
     // fully resolved.
-    if (is_last_component) {
+    bool ends_with_slash = sep == path_len - 1;
+    if (is_last_component || ends_with_slash) {
       return (LookupResult){.parent = dirnode, .name = path, .name_len = sep};
     } else {
       return (LookupResult){};
