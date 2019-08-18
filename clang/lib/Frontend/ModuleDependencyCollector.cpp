@@ -101,7 +101,7 @@ struct ModuleDependencyMMCallbacks : public ModuleMapCallbacks {
 
 // TODO: move this to Support/Path.h and check for HAVE_REALPATH?
 static bool real_path(StringRef SrcPath, SmallVectorImpl<char> &RealPath) {
-#ifdef LLVM_ON_UNIX
+#if defined LLVM_ON_UNIX && !defined BINJI_HACK
   char CanonicalPath[PATH_MAX];
 
   // TODO: emit a warning in case this fails...?

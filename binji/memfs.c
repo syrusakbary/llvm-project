@@ -8,7 +8,7 @@
 
 #include "stb_sprintf.h"
 
-#define TRACE 0
+#define TRACE 1
 #define DEBUG 0
 
 #define WASM_EXPORT __attribute__((__visibility__("default")))

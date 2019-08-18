@@ -515,11 +515,11 @@ profile('total time', () => {
             // '-mthread-model', 'single', '-mconstructor-aliases',
             // '-fuse-init-array', '-target-cpu', 'generic', '-fvisibility',
             // 'hidden', '-momit-leaf-frame-pointer', '-resource-dir',
-            // '/lib/clang/9.0.0',
+            // '/lib/clang/8.0.1',
             '-isysroot', '/',
             '-internal-isystem', '/include/c++/v1',
             '-internal-isystem', '/include',
-            '-internal-isystem', '/lib/clang/9.0.0/include',
+            '-internal-isystem', '/lib/clang/8.0.1/include',
 
             // '-fdebug-compilation-dir', '/',
             // '-O2',
