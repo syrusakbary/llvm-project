@@ -431,19 +431,19 @@ async function main() {
     const contents = `
     #include <stdio.h>
 
-    int fib(int n) {
-      if (n < 2) return n;
-      return fib(n-1) + fib(n-2);
-    }
-
     int main() {
-      printf("fib(10) = %d\\n", fib(10));
+      FILE* f = fopen("test.cc", "rt");
+      if (!f) return 1;
+      char buffer[1024];
+      int size = fread(buffer, 1, sizeof(buffer), f);
+      printf(">>>\\n%.*s\\n<<<", size, buffer);
+      return 0;
     }
     `;
 
     const memfs = new MemFS();
     await memfs.ready;
-    memfs.addFile(input, contents)
+    memfs.addFile(input, contents);
 
     const tar = new Tar('sysroot.tar');
     let entry;

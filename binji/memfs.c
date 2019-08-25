@@ -188,6 +188,14 @@ static __wasi_dirent_t *GetNextDirent(Node* dirnode, __wasi_dirent_t *dirent) {
   return NULL;
 }
 
+static bool IsRegularFileNode(Node *node) {
+  return node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE;
+}
+
+static bool IsDirectoryNode(Node *node) {
+  return node->stat.st_filetype == __WASI_FILETYPE_DIRECTORY;
+}
+
 typedef struct {
   Node* node;
   __wasi_inode_t inode;
@@ -317,7 +325,7 @@ static __wasi_errno_t RemoveDirent(Node* dirnode, __wasi_dirent_t* dirent) {
 
 static void EnsureFileSize(Node* node, __wasi_filesize_t new_size) {
   // TODO handle other file types
-  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  ASSERT(IsRegularFileNode(node));
   __wasi_filesize_t old_size = node->file.size;
   if (new_size > old_size) {
     void *new_data = realloc(node->file.data, new_size);
@@ -330,7 +338,7 @@ static void EnsureFileSize(Node* node, __wasi_filesize_t new_size) {
 }
 
 static void SetFileSize(Node* node, __wasi_filesize_t new_size) {
-  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  ASSERT(IsRegularFileNode(node));
   __wasi_filesize_t old_size = node->file.size;
   if (new_size > old_size) {
     EnsureFileSize(node, new_size);
@@ -392,6 +400,7 @@ static NewFDResult NewFD(Node* node, __wasi_fdstat_t stat, bool is_prestat) {
   result.fdesc->stat = stat;
   result.fdesc->stat.fs_filetype = node->stat.st_filetype;
   result.fdesc->is_prestat = is_prestat;
+  result.fdesc->offset = 0;
   node->fdesc_count++;
   return result;
 }
@@ -553,6 +562,22 @@ WASM_EXPORT __wasi_errno_t fd_filestat_set_size(__wasi_fd_t fd,
   return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
+static size_t ReadIovec(Node *node, __wasi_iovec_t *iovs, size_t iovs_len,
+                        __wasi_filesize_t offset) {
+  size_t total_len = 0;
+  for (size_t i = 0; i < iovs_len; ++i) {
+    __wasi_iovec_t *iov = &iovs[i];
+    debugf("!!  {buf:%p, buf_len:%zu}", iov->buf, iov->buf_len);
+    size_t len = iov->buf_len;
+    if (offset + len < node->file.size) {
+      len = node->file.size - offset;
+    }
+    copy_out(iov->buf, (char *)node->file.data + offset + total_len, len);
+    total_len += len;
+  }
+  return total_len;
+}
+
 WASM_EXPORT __wasi_errno_t fd_pread(__wasi_fd_t fd, const __wasi_iovec_t *iovs,
                                     size_t iovs_len, __wasi_filesize_t offset,
                                     size_t *nread) {
@@ -566,17 +591,7 @@ WASM_EXPORT __wasi_errno_t fd_pread(__wasi_fd_t fd, const __wasi_iovec_t *iovs,
   Node* node = GetNode(fdesc->inode);
   __wasi_iovec_t iovs_copy[iovs_len];
   copy_in(iovs_copy, iovs, sizeof(*iovs) * iovs_len);
-  size_t total_len = 0;
-  for (size_t i = 0; i < iovs_len; ++i) {
-    __wasi_iovec_t* iov = &iovs_copy[i];
-    debugf("!!  {buf:%p, buf_len:%zu}", iov->buf, iov->buf_len);
-    size_t len = iov->buf_len;
-    if (offset + len < node->file.size) {
-      len = node->file.size - offset;
-    }
-    copy_out(iov->buf, (char *)node->file.data + offset + total_len, len);
-    total_len += len;
-  }
+  size_t total_len = ReadIovec(node, iovs_copy, iovs_len, offset);
   tracef("!!  nread=%zu", total_len);
   copy_out(nread, &total_len, sizeof(*nread));
   return __WASI_ESUCCESS;
@@ -621,7 +636,18 @@ WASM_EXPORT __wasi_errno_t fd_read(__wasi_fd_t fd, const __wasi_iovec_t *iovs,
                                    size_t iovs_len, size_t *nread) {
   tracef("!!fd_read(fd:%u, iovs:%p, iovs_len:%zu, nread:%p)", fd, iovs,
          iovs_len, nread);
-  return TRACE_ERRNO(__WASI_ENOTCAPABLE);
+  FDesc* fdesc = GetFDesc(fd);
+  if (fdesc == NULL) {
+    return TRACE_ERRNO(__WASI_EBADF);
+  }
+  Node* node = GetNode(fdesc->inode);
+  __wasi_iovec_t iovs_copy[iovs_len];
+  copy_in(iovs_copy, iovs, sizeof(*iovs) * iovs_len);
+  size_t total_len = ReadIovec(node, iovs_copy, iovs_len, fdesc->offset);
+  fdesc->offset += total_len;
+  tracef("!!  nread=%zu", total_len);
+  copy_out(nread, &total_len, sizeof(*nread));
+  return __WASI_ESUCCESS;
 }
 
 WASM_EXPORT __wasi_errno_t fd_readdir(__wasi_fd_t fd, void *buf, size_t buf_len,
@@ -685,7 +711,7 @@ WASM_EXPORT __wasi_errno_t fd_write(__wasi_fd_t fd, const __wasi_ciovec_t *iovs,
          iovs_len, nwritten);
 
   // TODO handle other file types
-  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  ASSERT(IsRegularFileNode(node));
   // TODO handle append flag
   ASSERT(!(fdesc->stat.fs_flags & __WASI_FDFLAG_APPEND));
 
@@ -727,7 +753,7 @@ typedef struct {
 static LookupResult LookupPath(Node *dirnode, const char *path,
                                size_t path_len) {
   debugf("!!  LookupPath(%p, \"%.*s\")", dirnode, (int)path_len, path);
-  ASSERT(dirnode && dirnode->stat.st_filetype == __WASI_FILETYPE_DIRECTORY);
+  ASSERT(dirnode && IsDirectoryNode(dirnode));
 
   // Find path component to look up [0, sep).
   size_t sep;
@@ -820,14 +846,13 @@ path_open(__wasi_fd_t dirfd, __wasi_lookupflags_t dirflags, const char *path,
   if (!(oflags & (__WASI_O_CREAT | __WASI_O_EXCL)) && !lookup.node) {
     return TRACE_ERRNO(__WASI_ENOENT);
   }
-  if ((oflags & __WASI_O_DIRECTORY) &&
-      (lookup.node->stat.st_filetype != __WASI_FILETYPE_DIRECTORY)) {
+  if ((oflags & __WASI_O_DIRECTORY) && IsDirectoryNode(lookup.node)) {
     return TRACE_ERRNO(__WASI_ENOTDIR);
   }
 
   if ((oflags & __WASI_O_TRUNC) && lookup.node) {
     // TODO handle other file types
-    ASSERT(lookup.node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+    ASSERT(IsRegularFileNode(lookup.node));
     lookup.node->file.size = 0;
   }
 
@@ -903,13 +928,28 @@ WASM_EXPORT __wasi_errno_t path_rename(__wasi_fd_t old_fd, const char *old_path,
   }
 
   // TODO rename directory.
-  ASSERT(old_lookup.node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
-  // TODO overwriting an existing file
-  ASSERT(!new_lookup.node);
+  ASSERT(IsRegularFileNode(old_lookup.node) &&
+         (!new_lookup.node || IsRegularFileNode(new_lookup.node)));
+
+  if (new_lookup.node) {
+    // Remove the directory entry for this node. We increment the link count,
+    // in case we're renaming over a hard-link to the same node.
+    new_lookup.node->stat.st_nlink++;
+    RemoveDirent(new_lookup.parent, new_lookup.dirent);
+
+    // We may have changed old_lookup.dirent by calling RemoveDirent; look it
+    // up again.
+    old_lookup.dirent = FindDirentByName(old_lookup.parent, old_lookup.name,
+                                         old_lookup.name_len);
+  }
 
   RemoveDirent(old_lookup.parent, old_lookup.dirent);
   AddDirent(new_lookup.parent, new_lookup.name, new_lookup.name_len,
             GetInode(old_lookup.node));
+  if (new_lookup.node) {
+    // Decrement the link count that we incremented earlier.
+    UnlinkNode(new_lookup.node);
+  }
   return TRACE_ERRNO(__WASI_ESUCCESS);
 }
 
@@ -940,6 +980,7 @@ WASM_EXPORT __wasi_errno_t path_unlink_file(__wasi_fd_t fd, const char *path,
   if (!lookup.node) {
     return TRACE_ERRNO(__WASI_ENOENT);
   }
+  RemoveDirent(lookup.parent, lookup.dirent);
   UnlinkNode(lookup.node);
   return TRACE_ERRNO(__WASI_ESUCCESS);
 }
@@ -981,9 +1022,15 @@ WASM_EXPORT wasi_inode32_t AddFileNode(size_t path_len,
                                        wasi_filesize32_t file_size) {
   LookupResult lookup = LookupPath(g_root_node, g_path_buf, path_len);
   ASSERT(lookup.parent);
-  NewNodeResult new_node =
-      NewFileNode(lookup.parent, lookup.name, lookup.name_len, GetFileStat());
-  EnsureFileSize(new_node.node, file_size);
+  NewNodeResult new_node;
+  if (!lookup.node) {
+    new_node =
+        NewFileNode(lookup.parent, lookup.name, lookup.name_len, GetFileStat());
+  } else {
+    new_node.node = lookup.node;
+    new_node.inode = GetInode(lookup.node);
+  }
+  SetFileSize(new_node.node, file_size);
   tracef("!!  AddFileNode(path:\"%.*s\") => %" PRIu64, (int)path_len,
          g_path_buf, new_node.inode);
   return (wasi_inode32_t)new_node.inode;
@@ -992,7 +1039,7 @@ WASM_EXPORT wasi_inode32_t AddFileNode(size_t path_len,
 WASM_EXPORT void* GetFileNodeAddress(wasi_inode32_t inode) {
   Node* node = GetNode(inode);
   ASSERT(node);
-  ASSERT(node->stat.st_filetype == __WASI_FILETYPE_REGULAR_FILE);
+  ASSERT(IsRegularFileNode(node));
   tracef("!!  GetFileNodeAddress(inode:%u) => %p", inode, node->file.data);
   return node->file.data;
 }
