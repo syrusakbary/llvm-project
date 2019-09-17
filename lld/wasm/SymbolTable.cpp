@@ -118,7 +118,7 @@ static void checkFunctionType(Symbol *Existing, const InputFile *File,
     return;
   }
 
-  if (*NewSig != *OldSig)
+  if (Config->WarnOnSignatureMismatch && *NewSig != *OldSig)
     warn("function signature mismatch: " + Existing->getName() +
          "\n>>> defined as " + toString(*OldSig) + " in " +
          toString(Existing->getFile()) + "\n>>> defined as " +

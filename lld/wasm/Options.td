@@ -147,6 +147,9 @@ def no_entry: F<"no-entry">,
 def stack_first: F<"stack-first">,
   HelpText<"Place stack at start of linear memory rather than after data">;
 
+def warn_signature_mismatch: F<"warn-signature-mismatch">,
+  HelpText<"Print warning when function signatures mismatch">;
+
 defm whole_archive: B<"whole-archive",
     "Force load of all members in a static library",
     "Do not force load of all members in a static library (default)">;

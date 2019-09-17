@@ -363,6 +363,7 @@ static void setConfigs(opt::InputArgList &Args) {
   Config->StripAll = Args.hasArg(OPT_strip_all);
   Config->StripDebug = Args.hasArg(OPT_strip_debug);
   Config->StackFirst = Args.hasArg(OPT_stack_first);
+  Config->WarnOnSignatureMismatch = Args.hasArg(OPT_warn_signature_mismatch);
   Config->ThinLTOCacheDir = Args.getLastArgValue(OPT_thinlto_cache_dir);
   Config->ThinLTOCachePolicy = CHECK(
       parseCachePruningPolicy(Args.getLastArgValue(OPT_thinlto_cache_policy)),

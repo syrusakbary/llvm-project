@@ -39,6 +39,7 @@ struct Configuration {
   bool StripAll;
   bool StripDebug;
   bool StackFirst;
+  bool WarnOnSignatureMismatch;
   uint32_t GlobalBase;
   uint32_t InitialMemory;
   uint32_t MaxMemory;
