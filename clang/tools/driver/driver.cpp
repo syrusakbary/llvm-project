@@ -206,14 +206,6 @@ static void ApplyQAOverride(SmallVectorImpl<const char*> &Args,
   }
 }
 
-extern int cc1_main(ArrayRef<const char *> Argv, const char *Argv0,
-                    void *MainAddr);
-extern int cc1as_main(ArrayRef<const char *> Argv, const char *Argv0,
-                      void *MainAddr);
-extern int cc1gen_reproducer_main(ArrayRef<const char *> Argv,
-                                  const char *Argv0, void *MainAddr,
-                                  const llvm::ToolContext &);
-
 static void insertTargetAndModeArgs(const ParsedClangName &NameParts,
                                     SmallVectorImpl<const char *> &ArgVector,
                                     std::set<std::string> &SavedStrings) {
@@ -362,13 +354,6 @@ static int ExecuteCC1Tool(SmallVectorImpl<const char *> &ArgV,
   }
   StringRef Tool = ArgV[1];
   void *GetExecutablePathVP = (void *)(intptr_t)GetExecutablePath;
-  if (Tool == "-cc1")
-    return cc1_main(ArrayRef(ArgV).slice(1), ArgV[0], GetExecutablePathVP);
-  if (Tool == "-cc1as")
-    return cc1as_main(ArrayRef(ArgV).slice(2), ArgV[0], GetExecutablePathVP);
-  if (Tool == "-cc1gen-reproducer")
-    return cc1gen_reproducer_main(ArrayRef(ArgV).slice(2), ArgV[0],
-                                  GetExecutablePathVP, ToolContext);
   // Reject unknown tools.
   llvm::errs() << "error: unknown integrated tool '" << Tool << "'. "
                << "Valid tools include '-cc1' and '-cc1as'.\n";

@@ -25,24 +25,21 @@ endif()
 
 add_clang_tool(clang
   driver.cpp
-  cc1_main.cpp
-  cc1as_main.cpp
-  cc1gen_reproducer_main.cpp
 
   DEPENDS
-  intrinsics_gen
-  ${support_plugins}
+  # intrinsics_gen
+  # ${support_plugins}
   GENERATE_DRIVER
   )
 
 clang_target_link_libraries(clang
   PRIVATE
-  clangBasic
-  clangCodeGen
+  # clangBasic
+  # clangCodeGen
   clangDriver
   clangFrontend
-  clangFrontendTool
-  clangSerialization
+  # clangFrontendTool
+  # clangSerialization
   )
 
 if(WIN32 AND NOT CYGWIN)
